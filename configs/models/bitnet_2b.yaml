@@ -1,0 +1,28 @@
+# Configuration for microsoft/BitNet-b1.58-2B-4T model
+
+model:
+  hf_repo: microsoft/BitNet-b1.58-2B-4T
+  name: bitnet-2b-4t
+
+  # Model architecture
+  params: 2B
+  context_length: 4096
+
+  # Quantization
+  quant_type: i2_s  # CPU optimized
+  bits_per_weight: 1.58
+
+  # Expected sizes
+  gguf_size_mb: 500
+  memory_required_gb: 4
+
+serving:
+  # Default serving configuration
+  port: 8080
+  num_threads: 0  # Auto-detect
+  context_size: 4096
+  continuous_batching: true
+
+  # Performance tuning
+  batch_size: 8
+  max_concurrent_requests: 16

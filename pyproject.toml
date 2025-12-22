@@ -1,0 +1,71 @@
+[project]
+name = "wrinklefree-inference"
+version = "0.1.0"
+description = "BitNet model inference engine with KV caching optimization"
+authors = [{ name = "WrinkleFree Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["llm", "inference", "bitnet", "quantization", "ternary"]
+
+dependencies = [
+    "requests>=2.31.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0",
+    "hydra-core>=1.3.0",
+    "omegaconf>=2.3.0",
+    "huggingface_hub>=0.20.0",
+    "hf_transfer>=0.1.0",
+    "gguf>=0.9.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+    "locust>=2.20.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+]
+torch = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "safetensors>=0.4.0",
+]
+
+[project.scripts]
+wrinklefree-inference = "wrinklefree_inference.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wrinklefree_inference"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "auto"
+markers = [
+    "smoke: Quick smoke tests",
+    "integration: Integration tests requiring running server",
+    "kv_cache: KV cache validation tests",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true

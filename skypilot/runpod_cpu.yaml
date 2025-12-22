@@ -1,0 +1,62 @@
+# SkyPilot configuration for RunPod CPU inference
+# Uses BitNet.cpp's optimized CPU kernels for 1.58-bit models
+
+name: inference-engine-cpu
+
+resources:
+  cloud: runpod
+  cpus: 16+           # AMD EPYC with AVX512 preferred
+  memory: 64+         # Sufficient for 2B model + KV cache
+  disk_size: 40       # RunPod limit
+  use_spot: true      # Cost-effective for testing
+  ports: 8080
+
+envs:
+  MODEL_REPO: microsoft/BitNet-b1.58-2B-4T
+  QUANT_TYPE: i2_s    # CPU optimized quantization
+  NUM_THREADS: "0"    # 0 = auto-detect
+  CTX_SIZE: "4096"    # KV cache context size
+  PORT: "8080"
+
+file_mounts:
+  # Mount any local models if needed
+  # /models: ./models
+
+setup: |
+  set -ex
+
+  # Clone the inference engine repo
+  git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
+  cd /opt/inference-engine
+
+  # Install uv and sync dependencies
+  pip install uv
+  uv sync
+
+  # Setup BitNet and download/convert the model
+  # This compiles BitNet.cpp and downloads the model from HuggingFace
+  uv run python extern/BitNet/setup_env.py \
+    --hf-repo $MODEL_REPO \
+    -q $QUANT_TYPE
+
+run: |
+  set -ex
+  cd /opt/inference-engine
+
+  # Determine model path
+  MODEL_NAME=$(basename $MODEL_REPO)
+  MODEL_PATH="extern/BitNet/models/${MODEL_NAME}/ggml-model-${QUANT_TYPE}.gguf"
+
+  echo "Starting BitNet inference server..."
+  echo "Model: $MODEL_PATH"
+  echo "Context size: $CTX_SIZE"
+  echo "Threads: $NUM_THREADS (0=auto)"
+
+  # Start the inference server
+  python extern/BitNet/run_inference_server.py \
+    -m "$MODEL_PATH" \
+    -t $NUM_THREADS \
+    -c $CTX_SIZE \
+    -cb \
+    --host 0.0.0.0 \
+    --port $PORT
