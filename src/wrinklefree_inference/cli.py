@@ -218,6 +218,41 @@ def validate(url: str, timeout: int):
 
 @main.command()
 @click.option(
+    "--url",
+    default="http://localhost:8080",
+    help="Inference server URL",
+)
+@click.option("--port", "-p", default=8501, help="Streamlit port")
+def chat(url: str, port: int):
+    """Launch Streamlit chat interface."""
+    import subprocess
+    import os
+
+    console.print(f"[bold]Launching chat interface[/bold]")
+    console.print(f"Server URL: {url}")
+    console.print(f"Chat UI will be available at: http://localhost:{port}")
+
+    # Get the chat module path
+    chat_module = Path(__file__).parent / "ui" / "chat.py"
+
+    env = os.environ.copy()
+    env["INFERENCE_URL"] = url
+
+    try:
+        subprocess.run(
+            ["streamlit", "run", str(chat_module), "--server.port", str(port)],
+            env=env,
+            check=True,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Chat interface stopped[/yellow]")
+    except FileNotFoundError:
+        console.print("[red]Error:[/red] streamlit not found. Install with: pip install streamlit")
+        sys.exit(1)
+
+
+@main.command()
+@click.option(
     "--bitnet-path",
     type=click.Path(path_type=Path),
     default=None,
