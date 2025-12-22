@@ -286,5 +286,178 @@ def list_models(bitnet_path: Optional[Path]):
         sys.exit(1)
 
 
+@main.command("benchmark-cost")
+@click.option(
+    "--url",
+    default="http://localhost:8080",
+    help="Inference server URL",
+)
+@click.option(
+    "--hardware",
+    required=True,
+    type=click.Choice(["a40", "l4", "cpu_16", "cpu_32", "cpu_64"]),
+    help="Hardware configuration being benchmarked",
+)
+@click.option(
+    "--model",
+    default="bitnet-2b-4t",
+    help="Model being benchmarked",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=Path("results/raw"),
+    help="Output directory for results",
+)
+@click.option(
+    "--duration",
+    default=60,
+    help="Duration per batch size in seconds",
+)
+def benchmark_cost(
+    url: str,
+    hardware: str,
+    model: str,
+    output_dir: Path,
+    duration: int,
+):
+    """Run cost benchmarking against inference server."""
+    import asyncio
+
+    console.print("[bold]Cost Benchmarking[/bold]")
+    console.print(f"Server: {url}")
+    console.print(f"Hardware: {hardware}")
+    console.print(f"Model: {model}")
+
+    try:
+        # Import benchmark modules
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "benchmark"))
+        from benchmark.runner import BenchmarkConfig, BenchmarkRunner
+        from benchmark.cost_tracker import CostTracker
+
+        hardware_type = "gpu" if hardware in ["a40", "l4"] else "cpu"
+
+        config = BenchmarkConfig(
+            model=model,
+            model_size="2B",
+            quantization="native",
+            hardware=hardware,
+            hardware_type=hardware_type,
+            batch_sizes=[1, 4, 8],
+            duration_seconds=duration,
+            server_url=url,
+        )
+
+        async def run():
+            runner = BenchmarkRunner(config, CostTracker())
+            return await runner.run()
+
+        result = asyncio.run(run())
+
+        # Display results
+        table = Table(title="Benchmark Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("Throughput", f"{result.tokens_per_second:.1f} tok/s")
+        table.add_row("TTFT P50", f"{result.ttft_p50_ms:.0f}ms")
+        table.add_row("Latency P99", f"{result.latency_p99_ms:.0f}ms")
+        table.add_row("Hardware Cost", f"${result.hardware_cost_per_hour:.2f}/hr")
+        table.add_row("Cost/1M Tokens", f"${result.cost_per_million_tokens:.4f}")
+        table.add_row("Cost/1M @ 70%", f"${result.cost_per_million_at_70pct:.4f}")
+
+        console.print(table)
+
+        # Save result
+        output_path = result.save(output_dir)
+        console.print(f"\n[green]Saved:[/green] {output_path}")
+
+    except ImportError as e:
+        console.print(f"[red]Error:[/red] Missing benchmark dependencies: {e}")
+        console.print("Install with: uv sync --extra benchmark")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@main.command("naive-convert")
+@click.option(
+    "--model-id",
+    required=True,
+    help="HuggingFace model ID to convert",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=Path("models/naive"),
+    help="Output directory for converted model",
+)
+@click.option(
+    "--use-gpu/--no-gpu",
+    default=True,
+    help="Use GPU for conversion",
+)
+@click.option(
+    "--estimate-only",
+    is_flag=True,
+    help="Only estimate memory requirements",
+)
+def naive_convert(
+    model_id: str,
+    output_dir: Path,
+    use_gpu: bool,
+    estimate_only: bool,
+):
+    """Convert model to naive ternary format for benchmarking.
+
+    WARNING: This produces LOW QUALITY outputs.
+    Only use for speed/cost benchmarking, NOT production.
+    """
+    console.print("[bold yellow]WARNING: Naive conversion produces low quality outputs![/bold yellow]")
+    console.print("This is only for speed/cost benchmarking.\n")
+
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "benchmark"))
+        from benchmark.naive_converter import NaiveConverter, ConversionConfig
+
+        config = ConversionConfig(
+            model_id=model_id,
+            output_dir=output_dir,
+            use_gpu=use_gpu,
+        )
+
+        converter = NaiveConverter(config)
+
+        # Estimate memory
+        estimates = converter.estimate_memory_requirements()
+        if "error" not in estimates:
+            console.print(f"Model: {model_id}")
+            console.print(f"Estimated memory: {estimates['total_recommended_gb']:.1f} GB")
+
+        if estimate_only:
+            return
+
+        console.print("\n[yellow]Starting conversion...[/yellow]")
+
+        result = converter.convert()
+
+        if result.success:
+            console.print(f"\n[green]Success![/green]")
+            console.print(f"Output: {result.output_path}")
+            console.print(f"Compression: {result.compression_ratio:.1f}x")
+        else:
+            console.print(f"\n[red]Failed:[/red] {result.error}")
+            sys.exit(1)
+
+    except ImportError as e:
+        console.print(f"[red]Error:[/red] Missing conversion dependencies: {e}")
+        console.print("Install with: uv sync --extra convert")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

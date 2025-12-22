@@ -40,8 +40,9 @@ setup: |
   # Install build dependencies (clang, cmake, gcloud for caching)
   apt-get update && apt-get install -y clang cmake
 
-  # Install huggingface_hub for model downloading
-  python -m pip install huggingface_hub
+  # Install huggingface_hub with CLI for model downloading
+  # BitNet's setup_env.py uses huggingface-cli command
+  python -m pip install "huggingface_hub[cli]"
 
   # Clone the inference engine repo (or update if exists)
   if [ -d /opt/inference-engine ]; then
