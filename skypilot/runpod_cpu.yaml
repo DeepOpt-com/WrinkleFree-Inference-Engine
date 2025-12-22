@@ -37,9 +37,15 @@ setup: |
   # Install huggingface_hub for model downloading
   python -m pip install huggingface_hub
 
-  # Clone the inference engine repo
-  git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
-  cd /opt/inference-engine
+  # Clone the inference engine repo (or update if exists)
+  if [ -d /opt/inference-engine ]; then
+    cd /opt/inference-engine
+    git pull
+    git submodule update --init --recursive
+  else
+    git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
+    cd /opt/inference-engine
+  fi
 
   # Install uv and sync dependencies
   pip install uv
@@ -49,15 +55,21 @@ setup: |
   cd extern/BitNet
 
   # Pre-download the model using Python (more reliable than CLI)
-  set +H  # Disable bash history expansion
-  python -c "from huggingface_hub import snapshot_download; import os; model_name='$MODEL_REPO'.split('/')[-1]; model_dir=f'models/{model_name}'; os.makedirs(model_dir, exist_ok=True); print(f'Downloading $MODEL_REPO...'); snapshot_download('$MODEL_REPO', local_dir=model_dir); print('Download complete')"
-  set -H
+  MODEL_NAME=$(basename $MODEL_REPO)
+  mkdir -p models/$MODEL_NAME
+  python -c "
+  from huggingface_hub import snapshot_download
+  import os
+  repo = os.environ['MODEL_REPO']
+  model_name = repo.split('/')[-1]
+  model_dir = 'models/' + model_name
+  print('Downloading', repo)
+  snapshot_download(repo, local_dir=model_dir)
+  print('Download complete')
+  "
 
-  # Now run setup_env.py with --use-predownloaded since model exists
-  # The setup_env.py should skip download if model dir already exists
-  python setup_env.py \
-    --hf-repo $MODEL_REPO \
-    -q $QUANT_TYPE
+  # Run setup_env.py - builds binaries and converts model
+  python setup_env.py --hf-repo $MODEL_REPO -q $QUANT_TYPE
   cd /opt/inference-engine
 
 run: |
