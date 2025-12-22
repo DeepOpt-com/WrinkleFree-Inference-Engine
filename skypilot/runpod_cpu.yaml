@@ -34,6 +34,9 @@ setup: |
   # Install build dependencies (clang, cmake)
   apt-get update && apt-get install -y clang cmake
 
+  # Install huggingface-cli for model downloading
+  pip install huggingface_hub[cli]
+
   # Clone the inference engine repo
   git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
   cd /opt/inference-engine
