@@ -16,6 +16,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "stress: Stress tests with concurrent load")
     config.addinivalue_line("markers", "benchmark: Performance benchmark tests")
     config.addinivalue_line("markers", "slow: Slow tests that take longer to run")
+    config.addinivalue_line("markers", "caching: Tests for GCS build caching")
 
 
 @pytest.fixture
