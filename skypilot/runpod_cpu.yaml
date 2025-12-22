@@ -49,7 +49,9 @@ setup: |
   cd extern/BitNet
 
   # Pre-download the model using Python (more reliable than CLI)
-  python -c "from huggingface_hub import snapshot_download; import os; model_name='$MODEL_REPO'.split('/')[-1]; model_dir=f'models/{model_name}'; os.makedirs(model_dir, exist_ok=True); print(f'Downloading $MODEL_REPO...'); snapshot_download('$MODEL_REPO', local_dir=model_dir); print('Done!')"
+  set +H  # Disable bash history expansion
+  python -c "from huggingface_hub import snapshot_download; import os; model_name='$MODEL_REPO'.split('/')[-1]; model_dir=f'models/{model_name}'; os.makedirs(model_dir, exist_ok=True); print(f'Downloading $MODEL_REPO...'); snapshot_download('$MODEL_REPO', local_dir=model_dir); print('Download complete')"
+  set -H
 
   # Now run setup_env.py with --use-predownloaded since model exists
   # The setup_env.py should skip download if model dir already exists
