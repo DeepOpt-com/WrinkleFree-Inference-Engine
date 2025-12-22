@@ -34,8 +34,8 @@ setup: |
   # Install build dependencies (clang, cmake)
   apt-get update && apt-get install -y clang cmake
 
-  # Install huggingface-cli for model downloading (into conda python)
-  python -m pip install huggingface_hub[cli]
+  # Install huggingface_hub for model downloading
+  python -m pip install huggingface_hub
 
   # Clone the inference engine repo
   git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
@@ -45,9 +45,23 @@ setup: |
   pip install uv
   uv sync
 
-  # Setup BitNet and download/convert the model
-  # Run from within BitNet directory to handle relative paths
+  # Setup BitNet
   cd extern/BitNet
+
+  # Pre-download the model using Python (more reliable than CLI)
+  python -c "
+from huggingface_hub import snapshot_download
+import os
+model_name = '$MODEL_REPO'.split('/')[-1]
+model_dir = f'models/{model_name}'
+os.makedirs(model_dir, exist_ok=True)
+print(f'Downloading $MODEL_REPO to {model_dir}...')
+snapshot_download('$MODEL_REPO', local_dir=model_dir)
+print('Download complete!')
+"
+
+  # Now run setup_env.py with --use-predownloaded since model exists
+  # The setup_env.py should skip download if model dir already exists
   python setup_env.py \
     --hf-repo $MODEL_REPO \
     -q $QUANT_TYPE
