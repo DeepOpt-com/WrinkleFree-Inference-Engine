@@ -1,20 +1,26 @@
-# SkyPilot configuration for RunPod CPU inference
-# Uses BitNet.cpp's optimized CPU kernels for 1.58-bit models
+# SkyPilot configuration for RunPod inference
+# Uses BitNet.cpp's optimized kernels for 1.58-bit models
+#
+# Memory throughput is critical for BitNet performance:
+# - 1.58-bit weights are memory-bound (low compute intensity)
+# - High memory bandwidth CPUs/GPUs provide best performance
+# - AMD EPYC with DDR5 or GPUs with HBM are preferred
 
-name: inference-engine-cpu
+name: inference-engine
 
 resources:
   cloud: runpod
-  cpus: 16+           # AMD EPYC with AVX512 preferred
-  memory: 64+         # Sufficient for 2B model + KV cache
+  # Request GPU instance for better availability and memory bandwidth
+  # A40 has ~696 GB/s memory bandwidth vs ~200 GB/s DDR5 CPU
+  accelerators: A40:1
   disk_size: 40       # RunPod limit
-  use_spot: true      # Cost-effective for testing
+  use_spot: false     # Use on-demand for better availability
   ports: 8080
 
 envs:
   MODEL_REPO: microsoft/BitNet-b1.58-2B-4T
-  QUANT_TYPE: i2_s    # CPU optimized quantization
-  NUM_THREADS: "0"    # 0 = auto-detect
+  QUANT_TYPE: i2_s    # CPU optimized quantization (still works on GPU host)
+  NUM_THREADS: "0"    # 0 = auto-detect CPU threads
   CTX_SIZE: "4096"    # KV cache context size
   PORT: "8080"
 
