@@ -84,9 +84,42 @@ INFERENCE_URL=http://localhost:8080 uv run pytest tests/test_kv_cache.py -v
 - **Context size**: Default 4096, configurable via `-c` flag
 - **Continuous batching**: Enabled by default (`-cb` flag)
 
+## MoE Support
+
+The inference engine supports MoE models via llama.cpp's Mixtral-style expert tensors.
+
+### MoE Components
+- `src/wrinklefree_inference/moe/router.py` - TopKRouter, IdentityRouter
+- `src/wrinklefree_inference/moe/expert.py` - BitNetMoEFFN with K-of-N routing
+- `src/wrinklefree_inference/moe/fake_moe.py` - Convert dense → MoE for testing
+
+### GGUF MoE Tensors
+MoE models use these tensor patterns in GGUF:
+- `blk.{n}.ffn_gate_inp.weight` - Router logits
+- `blk.{n}.ffn_gate_exps.weight` - Packed expert gates (3D tensor)
+- `blk.{n}.ffn_up_exps.weight` - Packed expert up projections
+- `blk.{n}.ffn_down_exps.weight` - Packed expert down projections
+
+## Integration with WrinkleFree-Eval
+
+The inference engine can be used by WrinkleFree-Eval for optimized evaluation:
+
+```python
+# In WrinkleFree-Eval, set BITNET_PATH to use optimized inference
+export BITNET_PATH=/path/to/WrinkleFree-Inference-Engine/extern/BitNet
+
+# Or use the inference server
+uv run wrinklefree-inference serve -m model.gguf -c 4096 --port 8080
+
+# Eval uses HTTP client
+INFERENCE_URL=http://localhost:8080 uv run python scripts/run_eval.py
+```
+
 ## Notes
 
 - BitNet.cpp is a submodule at `extern/BitNet/` - run `git submodule update --init` if missing
 - Models are stored in `extern/BitNet/models/<model-name>/`
 - GGUF files are ~500MB for 2B model
 - Server requires 120s startup time for model loading
+- Use `i2_s` quantization for CPU-optimized inference
+- MoE models use llama.cpp's expert packing format
