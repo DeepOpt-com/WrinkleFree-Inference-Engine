@@ -1,0 +1,109 @@
+# SkyPilot configuration for RunPod A40 GPU benchmarking
+# Uses pre-built Docker image for fast startup
+#
+# Launch:
+#   sky launch skypilot/benchmark/runpod_a40_benchmark.yaml -c benchmark-a40
+
+name: cost-benchmark-a40
+
+resources:
+  cloud: runpod
+  accelerators: A40:1
+  disk_size: 100
+  use_spot: true
+  ports: 8080
+
+envs:
+  MODEL_REPO: microsoft/BitNet-b1.58-2B-4T
+  QUANT_TYPE: i2_s
+  NUM_THREADS: "0"
+  CTX_SIZE: "8192"
+  PORT: "8080"
+  BENCHMARK_MODE: "true"
+  RESULTS_DIR: /results
+
+# Mount network volume for model caching (create with runpod web UI first)
+# file_mounts:
+#   /runpod-volume:
+#     source: models-cache
+#     mode: rw
+
+setup: |
+  set -ex
+
+  # Install system dependencies
+  apt-get update && apt-get install -y clang cmake git curl
+
+  # Clone or update inference engine
+  if [ -d /opt/inference-engine ]; then
+    cd /opt/inference-engine
+    git pull
+    git submodule update --init --recursive
+  else
+    git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git /opt/inference-engine
+  fi
+
+  cd /opt/inference-engine
+
+  # Install Python dependencies
+  pip install uv
+  uv sync --extra benchmark
+
+  # Setup BitNet
+  cd extern/BitNet
+
+  # Download pre-converted GGUF
+  mkdir -p models/BitNet-b1.58-2B-4T
+  python -c "
+  from huggingface_hub import hf_hub_download
+  import shutil, os
+  p = hf_hub_download('microsoft/bitnet-b1.58-2B-4T-gguf', 'ggml-model-i2_s.gguf')
+  t = 'models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf'
+  os.makedirs(os.path.dirname(t), exist_ok=True)
+  shutil.copy(p, t)
+  print(f'Downloaded to {t}')
+  "
+
+  # Build BitNet.cpp
+  pip install -r requirements.txt
+  python setup_env.py --hf-repo $MODEL_REPO -q $QUANT_TYPE
+
+  mkdir -p /results
+
+run: |
+  set -ex
+  cd /opt/inference-engine/extern/BitNet
+
+  MODEL_PATH="models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
+
+  echo "=== BitNet A40 GPU Benchmark ==="
+  echo "Model: $MODEL_PATH"
+  echo "Context: $CTX_SIZE"
+  echo "Port: $PORT"
+
+  # Start server in background
+  ./build/bin/llama-server \
+    -m "$MODEL_PATH" \
+    -c $CTX_SIZE \
+    -t $NUM_THREADS \
+    --host 0.0.0.0 \
+    --port $PORT &
+
+  SERVER_PID=$!
+
+  # Wait for server to be ready
+  echo "Waiting for server to start..."
+  sleep 30
+
+  # Run benchmark
+  cd /opt/inference-engine
+  python scripts/benchmark_cost.py \
+    --url http://localhost:$PORT \
+    --hardware a40 \
+    --model bitnet-2b-4t \
+    --output-dir $RESULTS_DIR
+
+  # Stop server
+  kill $SERVER_PID 2>/dev/null || true
+
+  echo "Benchmark complete. Results in $RESULTS_DIR"
