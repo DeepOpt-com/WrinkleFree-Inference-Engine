@@ -51,6 +51,9 @@ uv run python extern/BitNet/setup_env.py --hf-repo microsoft/BitNet-b1.58-2B-4T 
 | `generate` | Generate text from prompt |
 | `validate` | Run KV cache validation |
 | `list-models` | List available GGUF models |
+| `benchmark-cost` | Run cost benchmarking |
+| `naive-convert` | Naive ternary conversion (for benchmarking) |
+| `chat` | Launch Streamlit chat interface |
 
 ## RunPod Deployment
 
@@ -111,6 +114,36 @@ Validation checks:
 - **Context limits** - Graceful handling at context window boundary
 - **Continuous batching** - Concurrent requests should succeed
 
+## Cost Benchmarking
+
+Benchmark inference cost efficiency across different hardware configurations:
+
+```bash
+# Install benchmark dependencies
+uv sync --extra benchmark
+
+# Run local benchmark (requires running server)
+uv run wrinklefree-inference benchmark-cost \
+    --url http://localhost:8080 \
+    --hardware a40 \
+    --model bitnet-2b-4t
+
+# Run cloud benchmark on RunPod
+sky launch skypilot/benchmark/runpod_a40_benchmark.yaml -y
+sky launch skypilot/benchmark/runpod_cpu_64core.yaml -y
+```
+
+For naive ternary conversion (low quality, for cost analysis only):
+
+```bash
+uv sync --extra convert
+uv run wrinklefree-inference naive-convert \
+    --model-id meta-llama/Llama-3.1-70B \
+    --estimate-only
+```
+
+See [docs/cost-benchmark.md](docs/cost-benchmark.md) for detailed methodology.
+
 ## Project Structure
 
 ```
@@ -120,6 +153,7 @@ WrinkleFree-Inference-Engine/
 │   ├── client/          # Python client (sync + async)
 │   ├── converter/       # HF to GGUF conversion
 │   └── kv_cache/        # KV cache validation
+├── benchmark/           # Cost benchmarking module
 ├── scripts/             # CLI scripts
 ├── configs/             # Hydra configs
 ├── skypilot/            # RunPod deployment configs
