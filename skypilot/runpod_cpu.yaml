@@ -40,10 +40,12 @@ setup: |
   uv sync
 
   # Setup BitNet and download/convert the model
-  # This compiles BitNet.cpp and downloads the model from HuggingFace
-  uv run python extern/BitNet/setup_env.py \
+  # Run from within BitNet directory to handle relative paths
+  cd extern/BitNet
+  python setup_env.py \
     --hf-repo $MODEL_REPO \
     -q $QUANT_TYPE
+  cd /opt/inference-engine
 
 run: |
   set -ex
