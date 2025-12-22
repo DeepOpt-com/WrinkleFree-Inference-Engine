@@ -63,6 +63,9 @@ markers = [
     "smoke: Quick smoke tests",
     "integration: Integration tests requiring running server",
     "kv_cache: KV cache validation tests",
+    "stress: Stress tests with concurrent load",
+    "benchmark: Performance benchmark tests",
+    "slow: Slow tests that take longer to run",
 ]
 
 [tool.mypy]

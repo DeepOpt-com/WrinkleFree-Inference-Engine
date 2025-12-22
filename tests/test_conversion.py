@@ -39,9 +39,17 @@ class TestHFToGGUFConverter:
 
     def test_default_bitnet_path(self):
         """Test that default BitNet path is calculated correctly."""
-        # This will fail if BitNet isn't initialized, which is expected in unit tests
-        with pytest.raises(FileNotFoundError):
-            HFToGGUFConverter()
+        # If BitNet submodule is initialized, converter should work
+        # If not, it should raise FileNotFoundError
+        try:
+            converter = HFToGGUFConverter()
+            # Submodule exists - verify path is correct
+            assert converter.bitnet_path.exists()
+            assert (converter.bitnet_path / "setup_env.py").exists() or \
+                   (converter.bitnet_path / "README.md").exists()
+        except FileNotFoundError:
+            # Expected if submodule not initialized
+            pass
 
     def test_custom_bitnet_path(self, tmp_path):
         """Test converter with custom BitNet path."""

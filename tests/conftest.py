@@ -13,6 +13,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "smoke: Quick smoke tests")
     config.addinivalue_line("markers", "integration: Integration tests requiring running server")
     config.addinivalue_line("markers", "kv_cache: KV cache validation tests")
+    config.addinivalue_line("markers", "stress: Stress tests with concurrent load")
+    config.addinivalue_line("markers", "benchmark: Performance benchmark tests")
+    config.addinivalue_line("markers", "slow: Slow tests that take longer to run")
 
 
 @pytest.fixture
@@ -45,7 +48,7 @@ def skip_if_no_server(client: BitNetClient):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip integration tests if no server available."""
+    """Auto-skip tests requiring server if no server available."""
     # Check if server is available
     url = os.environ.get("INFERENCE_URL", "http://localhost:8080")
     server_available = False
@@ -59,6 +62,7 @@ def pytest_collection_modifyitems(config, items):
 
     if not server_available:
         skip_marker = pytest.mark.skip(reason="Inference server not available")
+        server_required_markers = {"integration", "kv_cache", "stress", "benchmark"}
         for item in items:
-            if "integration" in item.keywords or "kv_cache" in item.keywords:
+            if any(marker in item.keywords for marker in server_required_markers):
                 item.add_marker(skip_marker)
