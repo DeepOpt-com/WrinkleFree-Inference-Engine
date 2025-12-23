@@ -66,7 +66,8 @@ run: |
   echo "=== Step 2: Patch config.json for BitNet ==="
   cd models/$MODEL_NAME
   cp config.json config.json.bak
-  python3 -c "import json; c=json.load(open('config.json')); c['architectures']=['BitnetForCausalLM']; c['model_type']='bitnet'; json.dump(c,open('config.json','w'),indent=2); print('Patched config.json')"
+  # Converter expects lowercase 'n' in BitnetForCausalLM
+  python3 -c "import json; c=json.load(open('config.json')); c['architectures']=['BitnetForCausalLM']; c['model_type']='bitnet-b1.58'; json.dump(c,open('config.json','w'),indent=2); print('Patched config.json for BitNet converter')"
 
   cd /opt/inference-engine/extern/BitNet
 
