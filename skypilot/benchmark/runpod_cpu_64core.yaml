@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/runpod_cpu_64core.yaml -c benchmark-cpu64
 
-name: cost-benchmark-cpu64
+name: bench-cpu64
 
 resources:
   cloud: runpod
@@ -91,6 +91,7 @@ run: |
     -m "$MODEL_PATH" \
     -c $CTX_SIZE \
     -t $NUM_THREADS \
+    -np 16 \
     --host 0.0.0.0 \
     --port $PORT &
 

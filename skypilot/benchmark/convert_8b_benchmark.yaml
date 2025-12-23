@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/convert_8b_benchmark.yaml -c convert-8b
 
-name: convert-8b-bitnet
+name: bench-8b-convert
 
 resources:
   cloud: runpod

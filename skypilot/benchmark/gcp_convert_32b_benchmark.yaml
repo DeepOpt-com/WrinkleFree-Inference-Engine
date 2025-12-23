@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/gcp_convert_32b_benchmark.yaml -c convert-32b
 
-name: gcp-convert-32b-bitnet
+name: bench-32b-gcp
 
 resources:
   cloud: gcp

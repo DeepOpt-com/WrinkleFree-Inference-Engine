@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/convert_7b_naive.yaml -c naive-7b
 
-name: naive-7b-conversion
+name: bench-7b-convert
 
 resources:
   cloud: runpod

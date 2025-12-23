@@ -5,14 +5,14 @@
 # Launch:
 #   sky launch skypilot/benchmark/gcp_cpu_32core.yaml -c benchmark-cpu32
 
-name: cost-benchmark-cpu32
+name: bench-gcp32
 
 resources:
   cloud: gcp
   cpus: 32
   memory: 128+
   disk_size: 100
-  use_spot: true
+  use_spot: false  # Use on-demand for benchmarks (more stable, consistent results)
   ports: 8080
 
 envs:
@@ -54,9 +54,10 @@ setup: |
   # Setup BitNet
   cd extern/BitNet
 
-  # Download pre-converted GGUF using huggingface-cli
+  # Download pre-converted GGUF using wget
   mkdir -p models/BitNet-b1.58-2B-4T
-  huggingface-cli download microsoft/bitnet-b1.58-2B-4T-gguf ggml-model-i2_s.gguf --local-dir models/BitNet-b1.58-2B-4T
+  wget -O models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+    "https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf"
 
   # Build BitNet.cpp with AVX512 support
   pip install -r requirements.txt

@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/naive_convert_a40.yaml -c naive-convert
 
-name: naive-convert
+name: bench-naive-a40
 
 resources:
   cloud: runpod

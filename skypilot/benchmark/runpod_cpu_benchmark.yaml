@@ -1,7 +1,7 @@
 # SkyPilot configuration for RunPod CPU benchmarking
 # BitNet.cpp is CPU-only, so we need high CPU count, not GPU
 
-name: cost-benchmark-cpu
+name: bench-cpu
 
 resources:
   cloud: runpod

@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/runpod_a40_benchmark.yaml -c benchmark-a40
 
-name: cost-benchmark-a40
+name: bench-a40
 
 resources:
   cloud: runpod

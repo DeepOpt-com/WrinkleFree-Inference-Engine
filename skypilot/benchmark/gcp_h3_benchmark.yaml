@@ -20,15 +20,16 @@
 # View results:
 #   sky logs h3-bench
 
-name: cost-benchmark-h3
+name: bench-h3
 
 resources:
   cloud: gcp
-  instance_type: h3-standard-88  # 88 vCPUs, 352GB DDR5
+  cpus: 88+               # High core count for parallelism
+  memory: 350+            # ~352GB DDR5 on H3
   region: us-central1
   disk_size: 200
-  disk_tier: pd-ssd
-  use_spot: true                 # Use spot for cost savings during benchmarks
+  disk_tier: high
+  use_spot: true          # Use spot for cost savings during benchmarks
   ports: 8080
 
 envs:
@@ -140,15 +141,15 @@ setup: |
     echo "Downloading model: $MODEL_REPO"
     mkdir -p models/$MODEL_NAME
     python3 -c "
-from huggingface_hub import snapshot_download
-import os
-repo = os.environ['MODEL_REPO']
-model_name = repo.split('/')[-1]
-model_dir = 'models/' + model_name
-print(f'Downloading {repo}')
-snapshot_download(repo, local_dir=model_dir)
-print('Download complete')
-"
+    from huggingface_hub import snapshot_download
+    import os
+    repo = os.environ['MODEL_REPO']
+    model_name = repo.split('/')[-1]
+    model_dir = 'models/' + model_name
+    print(f'Downloading {repo}')
+    snapshot_download(repo, local_dir=model_dir)
+    print('Download complete')
+    "
 
     # Build with optimizations
     pip install -r requirements.txt

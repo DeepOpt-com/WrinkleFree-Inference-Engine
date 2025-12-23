@@ -6,7 +6,7 @@
 #
 # Memory: Need 128GB+ for loading 32B model weights in bfloat16
 
-name: convert-32b-bitnet
+name: bench-32b-convert
 
 resources:
   cloud: runpod

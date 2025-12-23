@@ -3,7 +3,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/runpod_cpu_32core.yaml -c benchmark-cpu32
 
-name: cost-benchmark-cpu32
+name: bench-cpu32
 
 resources:
   cloud: runpod

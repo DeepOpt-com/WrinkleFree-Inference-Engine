@@ -4,7 +4,7 @@
 # Launch:
 #   sky launch skypilot/benchmark/gcp_cpu_96core.yaml -c benchmark-cpu96
 
-name: cost-benchmark-cpu96
+name: bench-gcp96
 
 resources:
   cloud: gcp
