@@ -340,6 +340,65 @@ void bitnet_gemv_best(
 }
 
 /**
+ * Pre-dequantize weights to float32 tensor for caching
+ * This matches the Python approach of materializing weights once
+ */
+torch::Tensor bitnet_dequant(
+    torch::Tensor weights,   // [N, K/4] uint8 packed
+    float scale
+) {
+    TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
+    TORCH_CHECK(weights.dtype() == torch::kUInt8, "weights must be uint8");
+
+    init_byte_lut();
+
+    int N = weights.size(0);
+    int K = weights.size(1) * 4;
+
+    auto output = torch::empty({N, K}, torch::kFloat32);
+
+    const uint8_t* w_ptr = weights.data_ptr<uint8_t>();
+    float* out_ptr = output.data_ptr<float>();
+
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < N; ++i) {
+        const uint8_t* w_row = w_ptr + i * (K / 4);
+        float* out_row = out_ptr + i * K;
+
+        for (int j = 0; j < K / 4; ++j) {
+            const float* w = BYTE_LUT[w_row[j]];
+            out_row[j * 4 + 0] = w[0] * scale;
+            out_row[j * 4 + 1] = w[1] * scale;
+            out_row[j * 4 + 2] = w[2] * scale;
+            out_row[j * 4 + 3] = w[3] * scale;
+        }
+    }
+
+    return output;
+}
+
+/**
+ * GEMV using pre-dequantized weights (like Python approach)
+ */
+torch::Tensor bitnet_gemv_cached(
+    torch::Tensor weights,   // [N, K] float32 pre-dequantized
+    torch::Tensor input      // [K] float32
+) {
+    TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
+    TORCH_CHECK(input.is_contiguous(), "input must be contiguous");
+    TORCH_CHECK(weights.dtype() == torch::kFloat32, "weights must be float32");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "input must be float32");
+
+    int N = weights.size(0);
+    int K = weights.size(1);
+
+    auto output = torch::empty({N}, torch::kFloat32);
+
+    // Use torch's optimized matmul for cached weights
+    return torch::mv(weights, input);
+}
+
+/**
  * Python-facing GEMV function
  */
 torch::Tensor bitnet_gemv(
@@ -441,5 +500,7 @@ std::vector<double> bitnet_benchmark(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemv", &bitnet_gemv, "BitNet 1.58-bit GEMV (fused dequant+matmul)");
+    m.def("dequant", &bitnet_dequant, "Pre-dequantize BitNet weights to float32");
+    m.def("gemv_cached", &bitnet_gemv_cached, "GEMV with pre-dequantized weights");
     m.def("benchmark", &bitnet_benchmark, "Benchmark GEMV implementations");
 }
