@@ -24,6 +24,7 @@ dependencies = [
     "skypilot[runpod]>=0.11.1",
     "pybind11>=3.0.1",
     "numpy>=2.2.6",
+    "gradio>=6.2.0",
 ]
 
 [project.optional-dependencies]
