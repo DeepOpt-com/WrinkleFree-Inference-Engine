@@ -1,3 +1,6 @@
 [submodule "extern/BitNet"]
 	path = extern/BitNet
 	url = https://github.com/microsoft/BitNet.git
+[submodule "extern/sglang-bitnet"]
+	path = extern/sglang-bitnet
+	url = https://github.com/sgl-project/sglang.git
