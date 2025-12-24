@@ -602,10 +602,145 @@ key, value = cache.get(layer_idx=0)
 
 ---
 
+## 2024-12-24: Activation Sparsity Implementation
+
+### Objective
+Implement Q-Sparse-style activation sparsity for BitNet inference optimization.
+
+### Research Background
+
+| Paper | Key Insight |
+|-------|-------------|
+| [Q-Sparse](https://arxiv.org/abs/2407.10969) | Optimal sparsity: 61.25% for 1.58-bit models (requires training) |
+| [BitNet a4.8](https://arxiv.org/abs/2411.04965) | 44.5% sparsity with squared ReLU |
+| [DejaVu](https://arxiv.org/abs/2310.17157) | 85% contextual sparsity, 2-7x speedup |
+| [PowerInfer](https://arxiv.org/abs/2312.12456) | 11.69x faster with adaptive predictors |
+
+### Implementation
+
+**Files created:**
+- `src/wrinklefree_inference/sglang_backend/activation_sparsity.py` - Core sparsity implementations
+- `src/wrinklefree_inference/sglang_backend/sparse_attention.py` - Attention sparsity
+- `configs/sparsity/` - Hydra configs for different sparsity levels
+- `configs/attention/` - Attention sparsity configs
+- `benchmark/sparsity_benchmark.py` - Benchmark harness
+
+**Sparsity modes implemented:**
+1. **Threshold**: Zero out activations below threshold
+2. **Top-K**: Keep top-k% activations by magnitude
+3. **Adaptive**: Entropy-based per-token sparsity adjustment
+
+### Benchmark Results: Activation Sparsity (10 iterations)
+
+#### Quality vs Sparsity Trade-off
+
+| Config | Sparsity | Cosine Similarity | Status |
+|--------|----------|-------------------|--------|
+| dense | 0% | 1.000 | PASS |
+| threshold_0.1 | ~8% | 0.9998 | PASS |
+| top_k_90 | 10% | 0.9997 | PASS |
+| top_k_80 | 20% | 0.9976 | PASS |
+| **top_k_70** | **30%** | **0.992** | **PASS** |
+| top_k_50 | 50% | 0.965 | WARN |
+| top_k_40 | 60% | 0.934 | FAIL |
+
+**Key Finding**: For inference-only (without Q-Sparse training), maximum safe sparsity is **30%** (top_k_ratio=0.7) to maintain >0.99 cosine similarity.
+
+#### Throughput Analysis
+
+| Batch Size | Dense (ms) | Top-K 30% (ms) | Speedup |
+|------------|------------|----------------|---------|
+| 1 | 0.83 | 1.20 | 0.69x (overhead) |
+| 32 | 14.6 | 17.5 | 0.83x (overhead) |
+| 128 | 59.9 | 65.1 | 0.92x (overhead) |
+
+**Finding**: Input activation sparsity alone does NOT provide speedup because:
+1. Top-k selection has overhead (sorting)
+2. Cannot skip dense matmul ops without sparse kernels
+3. Need fused sparse matmul for actual speedup
+
+### Recommended Configuration
+
+```yaml
+# configs/sparsity/qsparse.yaml
+sparsity:
+  enabled: true
+  mode: "top_k"
+  top_k_ratio: 0.7  # 30% sparsity (inference-only safe)
+
+# After Q-Sparse training (in WrinkleFree-CheaperTraining):
+# top_k_ratio: 0.4  # 60% sparsity (trained model)
+```
+
+---
+
+## 2024-12-24: Sparse Attention Implementation
+
+### Objective
+Implement adaptive sparse attention for memory-efficient long context inference.
+
+### Implementation
+
+**Attention sparsity modes:**
+1. **Top-K**: Keep top-k attention scores per query
+2. **Threshold**: Zero out attention below threshold
+3. **Window**: Sliding window + global tokens (Longformer-style)
+4. **Dynamic**: Entropy-based adaptive sparsity
+
+### Benchmark Results: Attention Sparsity
+
+| Mode | Sparsity | Memory | Quality (cosine) |
+|------|----------|--------|------------------|
+| dense | 0% | 100% | 1.000 (baseline) |
+| top_k_128 | 75% | 25% | 0.956 |
+| top_k_64 | 88% | 12.5% | 0.896 |
+| window_256 | 56% | 44% | 0.653 |
+| **dynamic** | **53%** | **47%** | **0.990** |
+
+**Key Finding**: **Dynamic sparse attention** achieves best quality (0.99) at 53% sparsity. Window attention has lower quality because it's a fixed pattern.
+
+### Memory Savings for Long Context
+
+| Context | Dense | Window(256) | Savings |
+|---------|-------|-------------|---------|
+| 2K | 16 MB | 2 MB | 88% |
+| 4K | 64 MB | 4 MB | 94% |
+| 8K | 256 MB | 8 MB | 97% |
+| 16K | 1024 MB | 16 MB | **98%** |
+
+### Recommended Configuration
+
+```yaml
+# configs/attention/dynamic.yaml
+attention_sparsity:
+  enabled: true
+  mode: "dynamic"
+  dynamic:
+    min_ratio: 0.1  # 90% sparsity max
+    max_ratio: 0.5  # 50% sparsity min
+```
+
+For long context (>8K), use window attention for memory efficiency:
+
+```yaml
+# configs/attention/window.yaml
+attention_sparsity:
+  enabled: true
+  mode: "window"
+  window:
+    size: 256
+    global_tokens: 1
+    stride: 64
+```
+
+---
+
 ### Next Steps
 
 1. Integrate with SGLang continuous batching scheduler
-2. Try VNNI-based kernel (avoid float conversion)
-3. Profile attention vs FFN bottlenecks
-4. Add AVX512 detection and dynamic dispatch
-5. Fuse KV cache update with attention kernel
+2. Add Q-Sparse training to WrinkleFree-CheaperTraining
+3. Implement fused sparse matmul kernels for actual speedup
+4. Try VNNI-based kernel (avoid float conversion)
+5. Add AVX512 detection and dynamic dispatch
+6. Fuse KV cache update with attention kernel
+7. Test dynamic attention on real generation tasks

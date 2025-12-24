@@ -23,6 +23,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import torch
 from torch.nn.parameter import Parameter
 
+from .activation_sparsity import (
+    ActivationSparsityConfig,
+    apply_sparsity,
+    get_default_config,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -267,14 +273,17 @@ class BitNetLinearMethod:
         compute_dtype: torch.dtype = torch.bfloat16,  # OPTIMIZATION: BF16 default
         num_threads: Optional[int] = None,  # None = auto-tune
         pretranspose: bool = False,  # NOTE: Pre-transpose is slower; .T view is faster
+        sparsity_config: Optional[ActivationSparsityConfig] = None,
     ):
         self.quant_type = quant_type
         self.compute_dtype = compute_dtype
         self.pretranspose = pretranspose
+        self.sparsity_config = sparsity_config or get_default_config()
         self._weight_cache: Dict[tuple, torch.Tensor] = {}  # Cache dequantized weights
         self._weight_cache_t: Dict[tuple, torch.Tensor] = {}  # Cache transposed weights
         self._num_threads = num_threads or self._get_optimal_threads()
         self._set_threads(self._num_threads)
+        self._last_sparsity: float = 0.0  # Track last sparsity ratio
 
     @staticmethod
     def _get_optimal_threads() -> int:
@@ -362,8 +371,9 @@ class BitNetLinearMethod:
         out_features: int,
         in_features: int,
         bias: Optional[torch.Tensor] = None,
+        sparsity_config: Optional[ActivationSparsityConfig] = None,
     ) -> torch.Tensor:
-        """Apply BitNet linear operation.
+        """Apply BitNet linear operation with optional activation sparsity.
 
         Args:
             packed_weight: Packed 2-bit weights
@@ -372,12 +382,18 @@ class BitNetLinearMethod:
             out_features: Number of output features
             in_features: Number of input features
             bias: Optional bias tensor
+            sparsity_config: Override sparsity config for this call
 
         Returns:
             Output tensor (batch, out_features)
         """
         # Convert input to compute_dtype for fast matmul
         x_compute = x.to(self.compute_dtype) if x.dtype != self.compute_dtype else x
+
+        # Apply activation sparsity (Q-Sparse style top-k)
+        config = sparsity_config or self.sparsity_config
+        if config.enabled:
+            x_compute, self._last_sparsity = apply_sparsity(x_compute, config)
 
         if self.pretranspose:
             # OPTIMIZATION 5: Use pre-transposed weight (avoids .T overhead)
@@ -391,6 +407,22 @@ class BitNetLinearMethod:
             out = out + bias.to(self.compute_dtype)
 
         return out
+
+    def get_last_sparsity(self) -> float:
+        """Get the sparsity ratio from the last apply() call."""
+        return self._last_sparsity
+
+    def get_sparsity_stats(self) -> Dict[str, float]:
+        """Get sparsity statistics if tracking is enabled."""
+        if not self.sparsity_config.track_stats:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "mode": self.sparsity_config.mode.value,
+            "average_sparsity": self.sparsity_config.get_average_sparsity(),
+            "last_sparsity": self._last_sparsity,
+            "num_samples": len(self.sparsity_config._sparsity_history),
+        }
 
 
 class BitNetConfig:
