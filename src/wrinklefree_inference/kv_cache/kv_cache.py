@@ -53,8 +53,8 @@ class KVCacheConfig:
     head_dim: int = 128
     """Dimension per attention head."""
 
-    dtype: KVCacheDtype = KVCacheDtype.BF16
-    """Data type for KV cache storage."""
+    dtype: KVCacheDtype = KVCacheDtype.INT8
+    """Data type for KV cache storage. INT8 default for 50% memory savings."""
 
     page_size: int = 16
     """Token page size for paged attention."""
