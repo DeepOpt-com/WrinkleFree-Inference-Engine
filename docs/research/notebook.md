@@ -349,9 +349,105 @@ To go faster, need:
 
 ---
 
+## 2024-12-23: Native C++ GEMV Kernel
+
+### Objective
+Implement native C++ kernel with fused dequant+matmul to reduce memory bandwidth and approach theoretical throughput limit.
+
+### Implementation Details
+
+**Files created:**
+- `src/wrinklefree_inference/native/bitnet_kernel.cpp` - AVX512 optimized GEMV
+- `src/wrinklefree_inference/native/setup.py` - PyTorch extension build
+- `src/wrinklefree_inference/native/__init__.py` - Python bindings
+- `benchmark/native_kernel_bench.py` - Benchmarking harness
+
+**Key optimizations:**
+1. Pre-computed 256-entry LUT: byte -> 4 floats (4KB, fits in L1)
+2. AVX512 FMA instructions for 16-wide SIMD
+3. Software prefetching for weights and inputs
+4. OpenMP parallelization over output rows
+
+### Optimization Journey
+
+| Iteration | Approach | Speedup vs Python |
+|-----------|----------|-------------------|
+| 1 | Scalar kernel (correctness) | 0.38x (broken) |
+| 2 | Fixed indexing bug | 0.38x (slow) |
+| 3 | AVX512 with scalar inner loops | 0.91x |
+| 4 | AVX512 with LUT + insertf32x4 | 0.97x |
+| 5 | AVX512 + gather | 0.97x |
+| 6 | LUT + prefetching | **1.01x** |
+
+### Thread Count Analysis (Native Kernel)
+
+| Threads | ms/layer | tok/s |
+|---------|----------|-------|
+| 1 | 56.34 | 0.55 |
+| 2 | 27.89 | 1.12 |
+| 4 | 14.74 | 2.12 |
+| 8 | **9.12** | **3.43** |
+| 12 | 9.95 | 3.14 |
+| 16 | 12.11 | 2.58 |
+
+**Finding:** 8 threads optimal. More threads cause cache contention.
+
+### Final Results (7B Model, 8 threads)
+
+| Implementation | ms/layer | tok/s | Notes |
+|----------------|----------|-------|-------|
+| Python BF16 + torch.compile | 8.86 | 3.53 | Baseline |
+| Native C++ AVX512 | 8.78 | **3.56** | 1.01x speedup |
+
+### Key Takeaways
+
+1. **Python is surprisingly fast**: torch.compile + BF16 is highly optimized and hard to beat.
+
+2. **LUT approach works**: Pre-computed 256 x 4 float LUT fits in L1 cache (4KB) and avoids bit manipulation overhead.
+
+3. **Fused kernels aren't always faster**: The Python baseline caches dequantized weights, so we're not actually saving memory bandwidth.
+
+4. **For true speedup, need:**
+   - Keep weights in packed format (no BF16 cache)
+   - Use VNNI or AMX instructions for int8 dot products
+   - Fuse with attention (avoid materializing activations)
+
+### Code Sample
+
+```cpp
+// AVX512 GEMV with LUT lookup
+void bitnet_gemv_avx512(
+    const uint8_t* weights,  // [N, K/4] packed
+    const float* input,      // [K]
+    float* output,           // [N]
+    float scale, int N, int K
+) {
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < N; ++i) {
+        const uint8_t* w_row = weights + i * (K / 4);
+        __m512 acc = _mm512_setzero_ps();
+
+        for (int j = 0; j + 16 <= K / 4; j += 16) {
+            // Prefetch
+            _mm_prefetch((const char*)(w_row + j + 64), _MM_HINT_T0);
+
+            // LUT lookup: 4 bytes -> 16 floats
+            __m128 w0 = _mm_load_ps(BYTE_LUT[w_row[j + 0]]);
+            // ... (combine 4 __m128 into __m512)
+
+            __m512 xv = _mm512_loadu_ps(input + j * 4);
+            acc = _mm512_fmadd_ps(wv, xv, acc);
+        }
+        output[i] = _mm512_reduce_add_ps(acc) * scale;
+    }
+}
+```
+
+---
+
 ### Next Steps
 
 1. Integrate with SGLang continuous batching scheduler
 2. Add FP8 KV cache support
-3. Build BitNet.cpp for native inference comparison
+3. Try VNNI-based kernel (avoid float conversion)
 4. Profile attention vs FFN bottlenecks
