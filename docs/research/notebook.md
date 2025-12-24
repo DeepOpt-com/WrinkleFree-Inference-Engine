@@ -224,6 +224,64 @@ The Python implementation is competitive for rapid prototyping but native C++ wo
 
 ---
 
+## 2024-12-23: Optimization Round 2 - torch.compile
+
+### Objective
+Further optimize 7B model throughput beyond the baseline optimizations.
+
+### Optimizations Tested
+
+| # | Optimization | Result |
+|---|--------------|--------|
+| 1 | Pre-transpose weights | **SLOWER** - .T view is faster than .contiguous() copy |
+| 2 | Larger batch sizes | batch=384 optimal (173.7 tok/s baseline) |
+| 3 | torch.compile | **+52% improvement** - 262.8 tok/s |
+| 4 | Thread count sweep | Minimal impact with torch.compile |
+| 5 | FP16 vs BF16 | BF16 8x faster for batched (FP16 only for batch=1) |
+| 6 | Numerical accuracy | Cosine sim > 0.9999 vs FP32 reference (PASS) |
+
+### Final Results (7B Model, 16-core CPU)
+
+| Batch | Baseline | + torch.compile | Speedup |
+|-------|----------|-----------------|---------|
+| 1 | 2.5 tok/s | 3.7 tok/s | 1.49x |
+| 32 | 68.7 tok/s | 104.5 tok/s | 1.52x |
+| 128 | 148.4 tok/s | 228.7 tok/s | 1.54x |
+| 256 | 169.1 tok/s | 256.1 tok/s | 1.51x |
+| 384 | 172.0 tok/s | **262.8 tok/s** | 1.53x |
+
+### Key Findings
+
+1. **Pre-transpose is slower**: Storing `weight.T.contiguous()` is slower than using `.T` view at runtime. The view operation is essentially free, while `.contiguous()` forces a memory copy.
+
+2. **Batch size sweet spot**: Optimal batch is 384 (not 256). Beyond 512, cache thrashing reduces throughput.
+
+3. **torch.compile is significant**: 52% improvement with default mode on CPU. All modes (default, reduce-overhead, max-autotune) give similar results.
+
+4. **Thread count doesn't matter with compile**: With torch.compile, performance is nearly identical from 4-16 threads.
+
+5. **BF16 is essential for batched**: FP16 is only faster for batch=1 (4.1 vs 3.7 tok/s). For batched, BF16 is 8x faster than FP16.
+
+6. **Numerical accuracy preserved**: Cosine similarity > 0.9999 between BF16 optimized and FP32 reference.
+
+### Recommended Configuration
+
+```python
+import torch
+
+os.environ["OMP_NUM_THREADS"] = "8"
+torch.set_num_threads(8)
+
+method = BitNetLinearMethod(compute_dtype=torch.bfloat16)
+
+# For production: wrap forward pass with torch.compile
+@torch.compile(mode="default")
+def forward(x):
+    return method.apply(packed_weight, scale, x, out_features, in_features)
+```
+
+---
+
 ### Next Steps
 
 1. Integrate with SGLang continuous batching scheduler

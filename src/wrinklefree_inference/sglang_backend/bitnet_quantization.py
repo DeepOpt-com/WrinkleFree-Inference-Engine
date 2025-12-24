@@ -254,11 +254,11 @@ class BitNetLinearMethod:
     2. Weight caching to avoid repeated dequantization (28x cumulative)
     3. BF16 computation for faster matmul (8x for GEMV, 3.5x for GEMM)
     4. Adaptive thread count based on batch size
-    5. Pre-transposed weights to avoid .T overhead
+    5. NOTE: Pre-transpose tested but slower than .T view (disabled)
     6. FP16 option for single-token (8% faster GEMV)
 
     Total speedup: ~240x for GEMV, ~50x for GEMM vs naive implementation.
-    Batch=256: 172.5 tok/s for 7B model on 16-core CPU.
+    7B throughput: batch=1: 2.5 tok/s, batch=256: 169 tok/s (16-core CPU)
     """
 
     def __init__(
@@ -266,7 +266,7 @@ class BitNetLinearMethod:
         quant_type: BitNetQuantType = BitNetQuantType.I2_S,
         compute_dtype: torch.dtype = torch.bfloat16,  # OPTIMIZATION: BF16 default
         num_threads: Optional[int] = None,  # None = auto-tune
-        pretranspose: bool = True,  # OPTIMIZATION: Pre-transpose weights
+        pretranspose: bool = False,  # NOTE: Pre-transpose is slower; .T view is faster
     ):
         self.quant_type = quant_type
         self.compute_dtype = compute_dtype
