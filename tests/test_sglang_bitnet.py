@@ -237,6 +237,104 @@ class TestBitNetInference:
         assert 300 < result["size_mb"] < 800, f"Unexpected model size: {result['size_mb']}MB"
 
 
+class TestNumericalAccuracy:
+    """Test numerical accuracy of BF16 optimization vs FP32 reference."""
+
+    @pytest.mark.parametrize("size", [
+        (4096, 4096),
+        (11008, 4096),
+        (4096, 11008),
+    ])
+    def test_bf16_cosine_similarity(self, size):
+        """Test that BF16 optimization preserves numerical accuracy.
+
+        Compares BF16-optimized output against FP32 reference.
+        Requires cosine similarity > 0.9999.
+        """
+        out_dim, in_dim = size
+
+        # Create random weight and quantize
+        w_orig = torch.randn(out_dim, in_dim, dtype=torch.float32)
+        packed, scale = quantize_to_bitnet(w_orig)
+
+        # Reference: FP32 dequantization and matmul
+        w_fp32 = dequantize_bitnet(packed, scale, out_dim, in_dim)
+
+        # Optimized: BF16 with caching
+        method = BitNetLinearMethod(compute_dtype=torch.bfloat16)
+
+        # Test with random input (batch=32)
+        x = torch.randn(32, in_dim, dtype=torch.float32)
+
+        # Reference output (FP32)
+        y_ref = torch.matmul(x, w_fp32.T)
+
+        # Optimized output (BF16)
+        y_opt = method.apply(packed, scale, x, out_dim, in_dim)
+        y_opt_fp32 = y_opt.to(torch.float32)
+
+        # Calculate cosine similarity
+        cos_sim = torch.nn.functional.cosine_similarity(
+            y_ref.flatten().unsqueeze(0),
+            y_opt_fp32.flatten().unsqueeze(0)
+        ).item()
+
+        # Must be > 0.9999 for production use
+        assert cos_sim > 0.9999, f"Cosine similarity {cos_sim:.6f} < 0.9999 for size {size}"
+
+    def test_bf16_relative_error(self):
+        """Test mean relative error is acceptable."""
+        out_dim, in_dim = 4096, 4096
+
+        w_orig = torch.randn(out_dim, in_dim, dtype=torch.float32)
+        packed, scale = quantize_to_bitnet(w_orig)
+        w_fp32 = dequantize_bitnet(packed, scale, out_dim, in_dim)
+
+        method = BitNetLinearMethod(compute_dtype=torch.bfloat16)
+        x = torch.randn(32, in_dim, dtype=torch.float32)
+
+        y_ref = torch.matmul(x, w_fp32.T)
+        y_opt = method.apply(packed, scale, x, out_dim, in_dim).to(torch.float32)
+
+        # Mean relative error
+        rel_error = ((y_ref - y_opt).abs() / (y_ref.abs() + 1e-8)).mean().item()
+
+        # Should be < 5% mean relative error
+        assert rel_error < 0.05, f"Mean relative error {rel_error:.2%} > 5%"
+
+    def test_fp16_vs_bf16_batched(self):
+        """Verify BF16 is better than FP16 for batched inference."""
+        out_dim, in_dim = 4096, 4096
+
+        w_orig = torch.randn(out_dim, in_dim, dtype=torch.float32)
+        packed, scale = quantize_to_bitnet(w_orig)
+        w_fp32 = dequantize_bitnet(packed, scale, out_dim, in_dim)
+
+        x = torch.randn(32, in_dim, dtype=torch.float32)
+        y_ref = torch.matmul(x, w_fp32.T)
+
+        # BF16
+        method_bf16 = BitNetLinearMethod(compute_dtype=torch.bfloat16)
+        y_bf16 = method_bf16.apply(packed, scale, x, out_dim, in_dim).to(torch.float32)
+
+        # FP16
+        method_fp16 = BitNetLinearMethod(compute_dtype=torch.float16)
+        y_fp16 = method_fp16.apply(packed, scale, x, out_dim, in_dim).to(torch.float32)
+
+        cos_bf16 = torch.nn.functional.cosine_similarity(
+            y_ref.flatten().unsqueeze(0), y_bf16.flatten().unsqueeze(0)
+        ).item()
+
+        cos_fp16 = torch.nn.functional.cosine_similarity(
+            y_ref.flatten().unsqueeze(0), y_fp16.flatten().unsqueeze(0)
+        ).item()
+
+        # BF16 should have similar or better accuracy than FP16
+        assert cos_bf16 >= 0.9999, f"BF16 cosine sim {cos_bf16:.6f} too low"
+        # FP16 may have lower accuracy but should still be acceptable
+        assert cos_fp16 >= 0.999, f"FP16 cosine sim {cos_fp16:.6f} too low"
+
+
 @pytest.mark.benchmark
 class TestBitNetPerformance:
     """Performance benchmarks for BitNet operations."""

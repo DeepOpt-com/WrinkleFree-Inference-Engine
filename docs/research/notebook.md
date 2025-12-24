@@ -282,6 +282,73 @@ def forward(x):
 
 ---
 
+## 2024-12-23: Single-Token Latency Optimization
+
+### Objective
+Minimize single-token (batch=1) latency for interactive inference.
+
+### Optimizations Tested
+
+| # | Optimization | tok/s | p99 latency | Improvement |
+|---|--------------|-------|-------------|-------------|
+| 1 | Baseline (BF16, 8 threads) | 2.46 | 12.88ms | - |
+| 2 | + torch.inference_mode | 2.46 | 12.84ms | 0% |
+| 3 | + torch.compile | 3.59 | 9.42ms | +46% |
+| 4 | + compile + inference_mode | 3.64 | 9.29ms | +48% |
+| 5 | + OMP_PROC_BIND=CLOSE | 3.66 | 8.61ms | +49% |
+| 6 | + gc.disable() | 3.66 | 8.64ms | +49% |
+| 7 | max-autotune mode | 3.68 | 8.86ms | +50% |
+
+### Key Findings
+
+1. **torch.compile is essential**: 46% improvement from JIT compilation alone.
+
+2. **Thread count doesn't matter for batch=1**: With torch.compile, performance is identical from 1-16 threads (memory-bound, not compute-bound).
+
+3. **OMP_PROC_BIND reduces variance**: Setting `OMP_PROC_BIND=CLOSE` and `OMP_PLACES=cores` reduces p99 latency (8.61ms vs 9.29ms).
+
+4. **GC doesn't help**: Disabling garbage collection has no measurable impact.
+
+5. **max-autotune marginal**: Only 2% better than default mode, but requires longer warmup.
+
+### Recommended Configuration for Single-Token
+
+```python
+import os
+import torch
+
+# Thread binding for consistent latency
+os.environ["OMP_NUM_THREADS"] = "8"
+os.environ["OMP_PROC_BIND"] = "CLOSE"
+os.environ["OMP_PLACES"] = "cores"
+torch.set_num_threads(8)
+
+# Compile with default mode (faster warmup than max-autotune)
+@torch.compile(mode="default")
+@torch.inference_mode()
+def forward(x):
+    return model(x)
+
+# Critical: warm up with exact input shape
+for _ in range(10):
+    _ = forward(torch.randn(1, hidden_dim))
+```
+
+### Memory-Bound Analysis
+
+Single-token inference is **memory-bound**, not compute-bound:
+- Weight tensor for 7B model layer: ~202MB (BF16 dequantized)
+- Memory bandwidth required: 202MB * 32 layers = 6.5GB per token
+- At DDR4-3200 (~50 GB/s): theoretical max ~7.7 tok/s
+- Achieved: 3.68 tok/s (~48% of theoretical)
+
+To go faster, need:
+1. Native C++ with fused dequant+matmul kernels
+2. AVX512 VNNI instructions for ternary weights
+3. Higher memory bandwidth (DDR5 or multi-channel)
+
+---
+
 ### Next Steps
 
 1. Integrate with SGLang continuous batching scheduler
