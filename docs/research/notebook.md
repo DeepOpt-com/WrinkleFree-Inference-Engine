@@ -169,9 +169,64 @@ def _dequant_numba(packed, scale):
 - `tests/test_sglang_bitnet.py` - Test suite
 - `extern/sglang-bitnet/` - SGLang fork with BitNet integration
 
+---
+
+## 2024-12-23: Model Throughput Benchmarks
+
+### Test Configuration
+- **CPU**: 16-core (Desktop machine)
+- **Threads**: 8 (optimal for GEMM)
+- **Compute dtype**: BF16
+- **Memory**: Packed 1.58-bit weights
+
+### Results
+
+| Model | Params | Packed Size | Single Token | Throughput | Batched (32) |
+|-------|--------|-------------|--------------|------------|--------------|
+| BitNet 2B | 2.4B | ~400 MB | 70.7 ms | **14.2 tok/s** | **372.6 tok/s** |
+| BitNet 7B | 6.6B | 1.54 GB | 402.6 ms | **2.5 tok/s** | **70.7 tok/s** |
+
+### Analysis
+
+**2B Model (BitNet-b1.58-2B-4T dimensions)**
+- Hidden: 2048, Intermediate: 5632, Layers: 24
+- ~51M params per layer
+- Single stream: 14.2 tokens/sec (human reading speed)
+- Batched: 372.6 tokens/sec (26x batch efficiency)
+
+**7B Model (Falcon3-7B-1.58bit dimensions)**
+- Hidden: 4096, Intermediate: 11008, Layers: 32
+- ~202M params per layer
+- Single stream: 2.5 tokens/sec
+- Batched: 70.7 tokens/sec (28x batch efficiency)
+
+### Memory Efficiency
+
+| Model | FP32 Size | Packed Size | Compression |
+|-------|-----------|-------------|-------------|
+| 2B | ~9.6 GB | ~400 MB | **24x** |
+| 7B | ~26.4 GB | ~1.54 GB | **17x** |
+
+### Comparison with BitNet.cpp Claims
+
+Microsoft claims BitNet.cpp achieves:
+- "5-7 tokens per second" for 100B models on single CPU
+- 2.37x-6.17x speedup on x86 vs FP16
+
+Our Python implementation (with optimizations):
+- 14.2 tok/s for 2B model (aligned with scaling)
+- 2.5 tok/s for 7B model (memory bandwidth limited)
+
+The Python implementation is competitive for rapid prototyping but native C++ would provide additional speedup from:
+- Fused dequant+matmul kernels
+- Better cache utilization
+- Direct SIMD intrinsics
+
+---
+
 ### Next Steps
 
 1. Integrate with SGLang continuous batching scheduler
 2. Add FP8 KV cache support
-3. Benchmark with full 2B model end-to-end
+3. Build BitNet.cpp for native inference comparison
 4. Profile attention vs FFN bottlenecks
