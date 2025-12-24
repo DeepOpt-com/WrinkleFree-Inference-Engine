@@ -205,11 +205,13 @@ Native BitNet models provide both quality AND cost efficiency. Naive ternary con
 
 ## Best Practices
 
-1. **Use spot instances** for benchmarking (40-50% savings)
+1. **Use on-demand instances** for benchmarking (spot instances may be preempted mid-benchmark)
 2. **Pre-cache Docker images** to reduce startup time
 3. **Run multiple iterations** for statistical significance
 4. **Test at different batch sizes** to find optimal throughput
 5. **Include warmup requests** before measuring
+
+**Note:** Do NOT use spot instances for benchmarks - they may be preempted during runs, leading to incomplete or inconsistent results. Use spot only for cost estimates, not actual benchmark measurements.
 
 ## Limitations
 

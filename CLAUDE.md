@@ -8,7 +8,7 @@ WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
 - **Inference**: BitNet.cpp (extern/BitNet submodule)
 - **Conversion**: HuggingFace → GGUF pipeline
 - **Validation**: KV cache behavior testing
-- **Deployment**: RunPod via SkyPilot
+- **Deployment**: Via WrinkleFree-Deployer (GCP C3D, H3, RunPod)
 
 ## Quick Start
 
@@ -44,7 +44,7 @@ src/wrinklefree_inference/
 |------|---------|
 | `extern/BitNet/run_inference_server.py` | BitNet.cpp server script |
 | `extern/BitNet/setup_env.py` | Model download + compilation |
-| `skypilot/runpod_cpu.yaml` | RunPod deployment config |
+| `../WrinkleFree-Deployer/skypilot/inference/` | Deployment configs (GCP, RunPod) |
 | `tests/test_kv_cache.py` | KV cache validation tests |
 
 ## Common Tasks
@@ -54,10 +54,13 @@ src/wrinklefree_inference/
 uv run python scripts/convert.py --hf-repo microsoft/BitNet-b1.58-2B-4T -q i2_s
 ```
 
-### Deploy to RunPod
+### Deploy to cloud
 ```bash
 cd ../WrinkleFree-Deployer
-sky launch ../WrinkleFree-Inference-Engine/skypilot/runpod_cpu.yaml -y --cluster ie-test
+# GCP C3D (production)
+sky launch skypilot/inference/gcp_c3d.yaml -y --cluster ie-c3d
+# RunPod (development)
+sky launch skypilot/inference/runpod_cpu.yaml -y --cluster ie-runpod
 ```
 
 ### Run KV cache validation

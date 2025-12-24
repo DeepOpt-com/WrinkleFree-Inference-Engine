@@ -55,26 +55,39 @@ uv run python extern/BitNet/setup_env.py --hf-repo microsoft/BitNet-b1.58-2B-4T 
 | `naive-convert` | Naive ternary conversion (for benchmarking) |
 | `chat` | Launch Streamlit chat interface |
 
-## RunPod Deployment
+## Cloud Deployment
+
+Deployment configs are in [WrinkleFree-Deployer/skypilot/inference/](../WrinkleFree-Deployer/skypilot/inference/).
 
 ```bash
 # From WrinkleFree-Deployer directory
 cd ../WrinkleFree-Deployer
 source .venv/bin/activate
 
-# Launch CPU pod
-sky launch ../WrinkleFree-Inference-Engine/skypilot/runpod_cpu.yaml -y --cluster ie-cpu
+# GCP C3D (recommended for production - AMD EPYC Genoa, DDR5)
+sky launch skypilot/inference/gcp_c3d.yaml -y --cluster ie-c3d
 
-# Get endpoint
-ENDPOINT=$(sky status ie-cpu --endpoint 8080)
+# GCP H3 (Intel alternative)
+sky launch skypilot/inference/gcp_h3.yaml -y --cluster ie-h3
+
+# RunPod (development)
+sky launch skypilot/inference/runpod_cpu.yaml -y --cluster ie-runpod
+
+# Get endpoint and test
+ENDPOINT=$(sky status ie-c3d --endpoint 8080)
 curl $ENDPOINT/health
 
-# Run tests
-INFERENCE_URL=$ENDPOINT uv run pytest tests/ -v -m integration
-
 # Teardown
-sky down ie-cpu -y
+sky down ie-c3d -y
 ```
+
+### Instance Comparison
+
+| Instance | CPU | Memory BW | vCPUs | RAM | Cost/hr |
+|----------|-----|-----------|-------|-----|---------|
+| GCP C3D-90 | AMD EPYC Genoa | ~460 GB/s | 90 | 360 GB | ~$4.00 |
+| GCP H3-88 | Intel Sapphire | ~307 GB/s | 88 | 352 GB | ~$1.76 |
+| RunPod A40 | Varies + GPU | ~696 GB/s | 16+ | 128+ GB | ~$0.80 |
 
 ## API Endpoints
 

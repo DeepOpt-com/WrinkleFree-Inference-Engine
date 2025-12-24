@@ -46,6 +46,10 @@ class BenchmarkMetrics:
     cpu_utilization_percent: Optional[float] = None
     gpu_utilization_percent: Optional[float] = None
 
+    # Memory bandwidth (from memory_profiler.py)
+    memory_bandwidth_gb_per_sec: float = 0.0
+    memory_bandwidth_utilization_percent: float = 0.0
+
     @classmethod
     def from_latencies(
         cls,
