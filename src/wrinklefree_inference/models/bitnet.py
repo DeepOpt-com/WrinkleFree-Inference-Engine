@@ -98,11 +98,12 @@ class BitNetAttention:
         self.config = config
         self.kernel = kernel
 
-        head_dim = config.hidden_size // config.num_attention_heads
-        self.head_dim = head_dim
+        self.head_dim = config.hidden_size // config.num_attention_heads
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
-        self.scale = 1.0 / math.sqrt(head_dim)
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
+        self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.rope_theta = config.rope_theta
 
         # Load projections
         self.q_proj = self._load_linear(layer_weights, "self_attn.q_proj")
@@ -113,6 +114,36 @@ class BitNetAttention:
         # RMSNorm for attention sublayer
         self.attn_sub_norm = layer_weights.get("self_attn.attn_sub_norm.weight")
 
+        # Precompute RoPE frequencies
+        self._init_rope(config.max_position_embeddings)
+
+    def _init_rope(self, max_seq_len: int):
+        """Initialize rotary position embedding frequencies."""
+        dim = self.head_dim
+        inv_freq = 1.0 / (self.rope_theta ** (np.arange(0, dim, 2, dtype=np.float32) / dim))
+        t = np.arange(max_seq_len, dtype=np.float32)
+        freqs = np.outer(t, inv_freq)
+        self.cos_cached = np.cos(freqs).astype(np.float32)
+        self.sin_cached = np.sin(freqs).astype(np.float32)
+
+    def _apply_rope(self, x: np.ndarray, position: int) -> np.ndarray:
+        """Apply rotary position embedding."""
+        seq_len = x.shape[0] if x.ndim == 3 else 1
+        cos = self.cos_cached[position:position + seq_len]
+        sin = self.sin_cached[position:position + seq_len]
+
+        # x shape: [seq, heads, head_dim] or [heads, head_dim]
+        if x.ndim == 2:
+            cos = cos[0]
+            sin = sin[0]
+
+        # Split into pairs and rotate
+        x1 = x[..., ::2]
+        x2 = x[..., 1::2]
+        rotated = np.stack([-x2, x1], axis=-1).reshape(x.shape)
+
+        return x * cos[..., None, :].repeat(2, axis=-1) + rotated * sin[..., None, :].repeat(2, axis=-1)
+
     def _load_linear(self, weights: dict, name: str) -> BitNetLinear:
         packed_hf = weights[f"{name}.weight"]
         scale_arr = weights[f"{name}.weight_scale"]
@@ -120,24 +151,106 @@ class BitNetAttention:
         repacked = repack_hf_weights(packed_hf)
         return BitNetLinear(repacked, scale, self.kernel)
 
-    def forward(self, hidden: np.ndarray, position: int = 0) -> np.ndarray:
-        """Forward pass (simplified, no KV cache for now)."""
-        # Q, K, V projections
-        q = self.q_proj.forward(hidden)
-        k = self.k_proj.forward(hidden)
-        v = self.v_proj.forward(hidden)
+    def forward(self, hidden: np.ndarray, positions: np.ndarray = None) -> np.ndarray:
+        """Forward pass with proper causal attention.
 
-        # Sublayer norm
-        if self.attn_sub_norm is not None:
-            q = self._rms_norm(q) * self.attn_sub_norm
-            k = self._rms_norm(k) * self.attn_sub_norm[:k.shape[-1]]
-            v = self._rms_norm(v) * self.attn_sub_norm[:v.shape[-1]]
+        Args:
+            hidden: [seq_len, hidden_size] or [hidden_size]
+            positions: Position indices for RoPE (optional, default 0..seq_len-1)
+        """
+        # Handle 1D input (single token)
+        if hidden.ndim == 1:
+            hidden = hidden[np.newaxis, :]  # [1, hidden]
 
-        # Simplified attention (no masking, single token)
-        # For batched: reshape to heads, compute attention, reshape back
-        attn_out = v  # Simplified - skip actual attention for demo
+        seq_len = hidden.shape[0]
+        if positions is None:
+            positions = np.arange(seq_len)
 
-        return self.o_proj.forward(attn_out)
+        # Process each position and collect Q, K, V
+        all_q, all_k, all_v = [], [], []
+
+        for i in range(seq_len):
+            h = hidden[i]
+
+            # Projections
+            q = self.q_proj.forward(h)
+            k = self.k_proj.forward(h)
+            v = self.v_proj.forward(h)
+
+            # Sublayer norm
+            if self.attn_sub_norm is not None:
+                q = self._rms_norm(q) * self.attn_sub_norm
+                k = self._rms_norm(k) * self.attn_sub_norm[:k.shape[-1]]
+                v = self._rms_norm(v) * self.attn_sub_norm[:v.shape[-1]]
+
+            # Reshape to heads: [num_heads, head_dim]
+            q = q.reshape(self.num_heads, self.head_dim)
+            k = k.reshape(self.num_kv_heads, self.head_dim)
+            v = v.reshape(self.num_kv_heads, self.head_dim)
+
+            # Apply RoPE
+            q = self._apply_rope_single(q, positions[i])
+            k = self._apply_rope_single(k, positions[i])
+
+            all_q.append(q)
+            all_k.append(k)
+            all_v.append(v)
+
+        # Stack: [seq_len, num_heads, head_dim]
+        Q = np.stack(all_q)
+        K = np.stack(all_k)
+        V = np.stack(all_v)
+
+        # Expand KV for GQA
+        if self.num_kv_groups > 1:
+            K = np.repeat(K, self.num_kv_groups, axis=1)
+            V = np.repeat(V, self.num_kv_groups, axis=1)
+
+        # Compute causal self-attention
+        # scores[i, h, j] = Q[i, h] @ K[j, h].T for j <= i
+        outputs = []
+        for i in range(seq_len):
+            # Attend to positions 0..i (causal)
+            q_i = Q[i]  # [num_heads, head_dim]
+            k_past = K[:i+1]  # [i+1, num_heads, head_dim]
+            v_past = V[:i+1]  # [i+1, num_heads, head_dim]
+
+            # Attention scores: [num_heads, i+1]
+            scores = np.einsum('hd,jhd->hj', q_i, k_past) * self.scale
+
+            # Softmax over past positions
+            scores = scores - scores.max(axis=-1, keepdims=True)
+            attn_weights = np.exp(scores) / np.exp(scores).sum(axis=-1, keepdims=True)
+
+            # Weighted sum of values: [num_heads, head_dim]
+            attn_out = np.einsum('hj,jhd->hd', attn_weights, v_past)
+            outputs.append(attn_out.reshape(-1))
+
+        # Stack and project: [seq_len, hidden_size]
+        attn_outputs = np.stack(outputs)
+
+        # Output projection for each position
+        final_outputs = []
+        for i in range(seq_len):
+            out = self.o_proj.forward(attn_outputs[i])
+            final_outputs.append(out)
+
+        result = np.stack(final_outputs)
+        return result if seq_len > 1 else result[0]
+
+    def _apply_rope_single(self, x: np.ndarray, position: int) -> np.ndarray:
+        """Apply RoPE to single position. x: [num_heads, head_dim]"""
+        cos = self.cos_cached[position]  # [head_dim/2]
+        sin = self.sin_cached[position]
+
+        x1 = x[..., ::2]
+        x2 = x[..., 1::2]
+
+        # Rotate
+        out = np.zeros_like(x)
+        out[..., ::2] = x1 * cos - x2 * sin
+        out[..., 1::2] = x1 * sin + x2 * cos
+        return out
 
     def _rms_norm(self, x: np.ndarray, eps: float = 1e-5) -> np.ndarray:
         variance = np.mean(x ** 2, axis=-1, keepdims=True)
@@ -145,7 +258,7 @@ class BitNetAttention:
 
 
 class BitNetMLP:
-    """Feed-forward network with SwiGLU activation."""
+    """Feed-forward network with ReLU² activation (BitNet style)."""
 
     def __init__(self, config: BitNetConfig, layer_weights: dict, kernel):
         self.kernel = kernel
@@ -167,8 +280,9 @@ class BitNetMLP:
         gate = self.gate_proj.forward(x)
         up = self.up_proj.forward(x)
 
-        # SwiGLU activation
-        hidden = gate * (1 / (1 + np.exp(-np.clip(gate, -20, 20)))) * up
+        # ReLU² activation (squared ReLU) - BitNet uses this
+        gate_act = np.maximum(gate, 0) ** 2
+        hidden = gate_act * up
 
         # Sublayer norm
         if self.ffn_sub_norm is not None:
@@ -192,20 +306,40 @@ class BitNetLayer:
         self.post_attention_layernorm = layer_weights.get("post_attention_layernorm.weight")
         self.eps = config.rms_norm_eps
 
-    def forward(self, hidden: np.ndarray, position: int = 0) -> np.ndarray:
-        # Pre-norm attention
-        residual = hidden
-        hidden = self._rms_norm(hidden) * self.input_layernorm
-        hidden = self.attention.forward(hidden, position)
-        hidden = residual + hidden
+    def forward(self, hidden: np.ndarray, positions: np.ndarray = None) -> np.ndarray:
+        """Forward pass for sequence.
 
-        # Pre-norm MLP
-        residual = hidden
-        hidden = self._rms_norm(hidden) * self.post_attention_layernorm
-        hidden = self.mlp.forward(hidden)
-        hidden = residual + hidden
+        Args:
+            hidden: [seq_len, hidden_size] or [hidden_size]
+            positions: Position indices for RoPE
+        """
+        is_1d = hidden.ndim == 1
+        if is_1d:
+            hidden = hidden[np.newaxis, :]
 
-        return hidden
+        seq_len = hidden.shape[0]
+
+        # Pre-norm attention (per position)
+        residual = hidden.copy()
+        normed = self._rms_norm(hidden) * self.input_layernorm
+        attn_out = self.attention.forward(normed, positions)
+        if attn_out.ndim == 1:
+            attn_out = attn_out[np.newaxis, :]
+        hidden = residual + attn_out
+
+        # Pre-norm MLP (per position)
+        residual = hidden.copy()
+        normed = self._rms_norm(hidden) * self.post_attention_layernorm
+
+        # MLP for each position
+        mlp_outputs = []
+        for i in range(seq_len):
+            out = self.mlp.forward(normed[i])
+            mlp_outputs.append(out)
+        mlp_out = np.stack(mlp_outputs)
+        hidden = residual + mlp_out
+
+        return hidden[0] if is_1d else hidden
 
     def _rms_norm(self, x: np.ndarray) -> np.ndarray:
         variance = np.mean(x ** 2, axis=-1, keepdims=True)
@@ -330,10 +464,11 @@ class BitNetModel:
         for _ in range(max_new_tokens):
             start = time.perf_counter()
 
-            # Forward pass on last token only (simplified - should use KV cache)
-            input_ids = np.array([tokens[-1]])
+            # Forward pass on FULL context (no KV cache - slow but correct)
+            input_ids = np.array(tokens)
             logits = self.forward(input_ids)
 
+            # Get logits for last position
             if logits.ndim > 1:
                 logits = logits[-1]
 
