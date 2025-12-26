@@ -146,9 +146,22 @@ print(bitnet_check_kernel_available())  # Should be True
     --port 30000 --device cpu
 ```
 
+## Chat Template
+
+BitNet-b1.58-2B-4T uses a simple chat template (from HuggingFace tokenizer_config.json):
+
+```
+Role: content<|eot_id|>
+```
+
+Example: `System: You are helpful<|eot_id|>User: Hello<|eot_id|>Assistant:`
+
+SGLang automatically applies this template when using the OpenAI-compatible `/v1/chat/completions` endpoint.
+
 ## Notes
 
 - **Custom SGLang fork**: We use `extern/sglang-bitnet/` (custom fork with BitNet kernels), NOT upstream sglang
+- **Chat template**: SGLang applies the model's HuggingFace chat template automatically
 - **Reference only**: BitNet.cpp at `extern/BitNet/` (do not serve)
 - HuggingFace models are automatically packed on-the-fly during loading
 - Server uses OpenAI-compatible API (`/v1/chat/completions`)

@@ -41,6 +41,7 @@ def generate_streaming(
     messages: list,
     max_tokens: int = 256,
     temperature: float = 0.7,
+    repetition_penalty: float = 1.1,
 ) -> Generator[str, None, None]:
     """Stream tokens from SGLang server using SSE."""
     payload = {
@@ -48,6 +49,7 @@ def generate_streaming(
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "repetition_penalty": repetition_penalty,
         "stream": True,
     }
 
@@ -95,6 +97,7 @@ def generate_sync(
     messages: list,
     max_tokens: int = 256,
     temperature: float = 0.7,
+    repetition_penalty: float = 1.1,
 ) -> tuple[str, dict]:
     """Generate response synchronously (non-streaming)."""
     payload = {
@@ -102,6 +105,7 @@ def generate_sync(
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "repetition_penalty": repetition_penalty,
         "stream": False,
     }
 
@@ -142,6 +146,7 @@ with st.sidebar:
     st.header("Settings")
     max_tokens = st.slider("Max tokens", 32, 512, 256)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.7)
+    repetition_penalty = st.slider("Repetition penalty", 1.0, 2.0, 1.1)
     use_streaming = st.checkbox("Streaming", value=True)
 
     st.divider()
@@ -195,7 +200,7 @@ if prompt := st.chat_input("Type a message..."):
             token_count = 0
             start_time = time.perf_counter()
 
-            for token in generate_streaming(api_messages, max_tokens, temperature):
+            for token in generate_streaming(api_messages, max_tokens, temperature, repetition_penalty):
                 full_response += token
                 token_count += 1
                 output_placeholder.markdown(full_response + "")
@@ -209,7 +214,7 @@ if prompt := st.chat_input("Type a message..."):
             )
         else:
             with st.spinner("Generating..."):
-                full_response, stats = generate_sync(api_messages, max_tokens, temperature)
+                full_response, stats = generate_sync(api_messages, max_tokens, temperature, repetition_penalty)
             st.markdown(full_response)
             st.caption(
                 f"Generated {stats['tokens']} tokens in {stats['elapsed']:.1f}s "
