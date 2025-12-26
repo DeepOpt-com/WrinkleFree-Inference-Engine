@@ -28,6 +28,17 @@ try:
 except ImportError:
     BITNET_KERNEL_AVAILABLE = False
 
+# Try to import kernel patcher
+try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from wrinklefree_inference.kernels import patch_model_with_native_kernels
+    PATCHER_AVAILABLE = True
+except ImportError:
+    PATCHER_AVAILABLE = False
+    patch_model_with_native_kernels = None
+
 app = FastAPI(title="BitNet Inference Server")
 
 # Global model and tokenizer
@@ -57,7 +68,7 @@ class CompletionRequest(BaseModel):
     stream: bool = False
 
 
-def load_model(model_id: str):
+def load_model(model_id: str, use_native_kernels: bool = True):
     """Load BitNet model and tokenizer."""
     global model, tokenizer, model_name
 
@@ -66,6 +77,7 @@ def load_model(model_id: str):
 
     print(f"Loading model: {model_id}")
     print(f"BitNet native kernels available: {BITNET_KERNEL_AVAILABLE}")
+    print(f"Kernel patcher available: {PATCHER_AVAILABLE}")
 
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
@@ -74,6 +86,14 @@ def load_model(model_id: str):
     )
     model_name = model_id
     print(f"Model loaded. Device: {model.device}")
+
+    # Try to patch with native kernels
+    if use_native_kernels and PATCHER_AVAILABLE and BITNET_KERNEL_AVAILABLE:
+        try:
+            patched = patch_model_with_native_kernels(model)
+            print(f"Patched {patched} layers with native BitNet kernels")
+        except Exception as e:
+            print(f"Warning: Failed to patch model: {e}")
 
 
 def generate_text(
