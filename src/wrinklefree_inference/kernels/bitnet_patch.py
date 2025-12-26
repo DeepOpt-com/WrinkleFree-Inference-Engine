@@ -78,12 +78,48 @@ class BitNetLinearNative(nn.Module):
         return output.view(*batch_shape, self.out_features)
 
 
+def pack_ternary_weights(weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Pack ternary weights {-1, 0, +1} into 2-bit packed format.
+
+    Args:
+        weight: Float tensor with values in {-1, 0, +1}
+
+    Returns:
+        Tuple of (packed_weight uint8, scale float tensor)
+    """
+    out_features, in_features = weight.shape
+
+    # Ensure in_features is divisible by 4 for packing
+    if in_features % 4 != 0:
+        raise ValueError(f"in_features ({in_features}) must be divisible by 4")
+
+    # Round to ternary: {-1, 0, +1}
+    # Encoding: -1 -> 0 (00), 0 -> 1 (01), +1 -> 2 (10)
+    ternary = torch.round(weight.float()).clamp(-1, 1).to(torch.int8)
+    encoded = (ternary + 1).to(torch.uint8)  # Now 0, 1, 2
+
+    # Pack 4 values per byte
+    packed_weight = torch.zeros(out_features, in_features // 4, dtype=torch.uint8)
+
+    for i in range(4):
+        packed_weight |= (encoded[:, i::4] << (i * 2))
+
+    # Compute scale (using max abs value for proper scaling)
+    scale = weight.abs().max().item()
+    if scale < 1e-6:
+        scale = 1.0
+
+    return packed_weight, torch.tensor(scale, dtype=torch.float32)
+
+
 def extract_packed_weight_and_scale(
     linear: nn.Module,
+    force_repack: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Extract packed weights and scale from a BitNet linear layer.
 
     BitNet models store weights in packed uint8 format (4 values per byte).
+    If force_repack=True, will attempt to pack float ternary weights.
     """
     # Check for BitNet-style packed weights
     if hasattr(linear, "weight"):
@@ -100,8 +136,22 @@ def extract_packed_weight_and_scale(
             else:
                 # Default scale
                 weight_scale = torch.tensor(1.0)
+        elif force_repack and weight.numel() > 0:
+            # Check if weights are already ternary-ish
+            unique_vals = torch.unique(torch.round(weight.float()))
+            is_ternary = len(unique_vals) <= 3 and unique_vals.abs().max() <= 1.0
+
+            if is_ternary:
+                try:
+                    packed_weight, weight_scale = pack_ternary_weights(weight)
+                    logger.info(f"Repacked ternary weights for {linear}")
+                except Exception as e:
+                    logger.warning(f"Failed to repack weights for {linear}: {e}")
+                    return None, None, None
+            else:
+                logger.warning(f"Non-ternary weights found (unique: {unique_vals.tolist()}), skipping {linear}")
+                return None, None, None
         else:
-            # Need to pack the weights
             logger.warning(f"Non-packed weights found, skipping native kernel for {linear}")
             return None, None, None
     else:
