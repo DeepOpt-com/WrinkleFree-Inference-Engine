@@ -4,6 +4,6 @@ __version__ = "0.1.0"
 
 # Primary modules (SGLang-BitNet stack)
 from wrinklefree_inference.client.bitnet_client import BitNetClient
-from wrinklefree_inference.sglang_backend import quantize_to_bitnet, pack_weights_bitnet
+from wrinklefree_inference.sglang_backend import BitNetConfig, BITNET_QUANT_TYPES
 
-__all__ = ["BitNetClient", "quantize_to_bitnet", "pack_weights_bitnet", "__version__"]
+__all__ = ["BitNetClient", "BitNetConfig", "BITNET_QUANT_TYPES", "__version__"]
