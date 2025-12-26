@@ -1,67 +1,77 @@
 # WrinkleFree Inference Engine - Research Notebook
 
-## 2024-12-25: sglang-bitnet Integration Status
+## 2024-12-25: sglang-bitnet Integration - COMPLETED BUILD
 
-### Current State
+### Summary
 
-**Working paths:**
-1. **Transformers** - Full model inference works with `AutoModelForCausalLM`
-2. **Our Python backend** - `src/wrinklefree_inference/sglang_backend/bitnet_quantization.py`
+Successfully built sgl-kernel with BitNet SIMD kernels. Native kernels are registered in PyTorch.
 
-**Blocked:**
-- sglang-bitnet native kernel (`sgl-kernel`) requires CMake build which fails on Desktop
-- Need CUDA toolkit or specific build dependencies
+### Build Fixes Applied
 
-### Quick Start (Working)
+1. **NUMA optional**: Modified `numa_utils.cpp` and `CMakeLists.txt` to guard libnuma with `SGL_KERNEL_HAS_NUMA`
+2. **Missing include**: Added `#include <vector>` to `bitnet_gemv.cpp`
+3. **CLI registration**: Added `"bitnet"` to `QUANTIZATION_CHOICES` in `server_args.py`
+4. **Missing function**: Added `auto_tune_tiles()` stub to quantization/bitnet.py
 
-```bash
-# Using transformers (simplest, works immediately)
-uv run python test_inference.py
-
-# Output: Coherent text generation at ~2 tok/s on CPU
-```
-
-### Model Conversion
-
-The HuggingFace model already has packed 1.58-bit weights:
-```bash
-uv run python scripts/convert_to_sglang.py --model microsoft/bitnet-b1.58-2B-4T
-```
-
-Outputs `models/bitnet-b1.58-2B-4T/sglang/` with:
-- 210 packed uint8 weight tensors
-- 210 scale tensors
-- config.json with quantization_config
-
-### Weight Format
+### Kernel Verification
 
 ```python
-# Packed weights: 4 ternary values per uint8 byte
-# Encoding: 00=-1, 01=0, 10=+1 (2 bits each)
-weight.dtype  # torch.uint8
-weight.shape  # (out_features, in_features // 4)
-
-# Scale per tensor
-scale.dtype   # torch.bfloat16
-scale.shape   # (1,)
-
-# Dequantization produces {-scale, 0, +scale}
+>>> import torch, sgl_kernel
+>>> print(hasattr(torch.ops.sgl_kernel, 'bitnet_gemv_cpu'))
+True  # SUCCESS
 ```
 
-### Next Steps
+### Remaining Issue: Model Architecture
 
-1. **Build sgl-kernel on GPU machine** - Native SIMD kernels for 10x speedup
-2. **Integrate with SGLang server** - OpenAI-compatible API
-3. **Add to WrinkleFree-Deployer** - Cloud deployment configs
+sglang server fails because:
+1. `BitNetForCausalLM` has no native sglang implementation
+2. Falls back to transformers wrapper
+3. Wrapper doesn't know about packed uint8 weights → size mismatch error
 
-### Files
+```
+AssertionError: Attempted to load weight (torch.Size([640, 6912]))
+into parameter (torch.Size([2560, 6912]))
+# 640 = 2560/4 (packed 2-bit weights, 4 per byte)
+```
 
-| File | Purpose |
-|------|---------|
-| `scripts/convert_to_sglang.py` | HF → sglang format |
-| `src/wrinklefree_inference/sglang_backend/bitnet_quantization.py` | Python kernels |
-| `extern/sglang-bitnet/sgl-kernel/` | Native kernels (needs build) |
-| `test_inference.py` | Working inference test |
+### What's Needed for Full Integration
+
+1. **Create `sglang/srt/models/bitnet.py`** - Native sglang BitNet model that:
+   - Uses `BitNetLinearMethod` from quantization layer
+   - Handles packed uint8 weight loading
+   - Maps to standard LlamaForCausalLM-style architecture
+
+2. **Or modify transformers wrapper** to recognize BitNet quantization config and use proper weight loading
+
+### Working Path (Current)
+
+```bash
+# Streamlit demo with transformers backend
+uv run streamlit run demo/serve_streamlit.py --server.port 7860
+```
+
+### Quick Start
+
+```bash
+# Build sgl-kernel (requires CUDA in PATH for cmake)
+CUDACXX=/usr/local/cuda/bin/nvcc uv pip install ./extern/sglang-bitnet/sgl-kernel --no-build-isolation
+
+# Install sglang-bitnet
+uv pip install ./extern/sglang-bitnet/python
+
+# Verify kernel
+uv run python -c "import torch, sgl_kernel; print(hasattr(torch.ops.sgl_kernel, 'bitnet_gemv_cpu'))"
+```
+
+### Files Modified (Committed)
+
+| File | Change |
+|------|--------|
+| `sgl-kernel/csrc/cpu/numa_utils.cpp` | Guard libnuma with ifdef |
+| `sgl-kernel/csrc/cpu/CMakeLists.txt` | Add SGL_KERNEL_HAS_NUMA define |
+| `sgl-kernel/csrc/bitnet/bitnet_gemv.cpp` | Add `#include <vector>` |
+| `sgl-kernel/python/sgl_kernel/quantization/bitnet.py` | Add `auto_tune_tiles()` |
+| `python/sglang/srt/server_args.py` | Add "bitnet" to QUANTIZATION_CHOICES |
 
 ---
 
