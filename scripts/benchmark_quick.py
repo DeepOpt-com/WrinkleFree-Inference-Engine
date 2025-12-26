@@ -17,6 +17,7 @@ import json
 import os
 import statistics
 import time
+import concurrent.futures
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional
@@ -238,6 +239,73 @@ def check_server(url: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def run_concurrent_benchmark(
+    url: str,
+    num_requests: int,
+    max_tokens: int = 50,
+    prompt: str = "Hello, how are you?",
+) -> dict:
+    """Run concurrent requests to test batch parallelism and continuous batching."""
+
+    def single_request(request_id: int) -> dict:
+        payload = {
+            "model": "default",
+            "messages": [{"role": "user", "content": f"{prompt} (Request {request_id})"}],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+            "stream": False,
+        }
+
+        start = time.perf_counter()
+        try:
+            resp = requests.post(
+                f"{url}/v1/chat/completions",
+                json=payload,
+                timeout=120,
+            )
+            elapsed = time.perf_counter() - start
+            data = resp.json()
+            usage = data.get("usage", {})
+            return {
+                "success": True,
+                "request_id": request_id,
+                "time_s": elapsed,
+                "completion_tokens": usage.get("completion_tokens", 0),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "request_id": request_id,
+                "time_s": time.perf_counter() - start,
+                "error": str(e),
+            }
+
+    print(f"  Running {num_requests} concurrent requests...")
+    start_time = time.perf_counter()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_requests) as executor:
+        futures = [executor.submit(single_request, i) for i in range(num_requests)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    total_time = time.perf_counter() - start_time
+
+    # Calculate metrics
+    successful = [r for r in results if r["success"]]
+    total_tokens = sum(r["completion_tokens"] for r in successful)
+    avg_latency = statistics.mean([r["time_s"] for r in successful]) if successful else 0
+
+    return {
+        "num_requests": num_requests,
+        "successful": len(successful),
+        "failed": len(results) - len(successful),
+        "total_time_s": total_time,
+        "total_tokens": total_tokens,
+        "throughput_req_per_s": len(successful) / total_time if total_time > 0 else 0,
+        "throughput_tok_per_s": total_tokens / total_time if total_time > 0 else 0,
+        "avg_latency_s": avg_latency,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Quick benchmark for sglang-bitnet")
     parser.add_argument("--url", default=SGLANG_URL, help="SGLang server URL")
@@ -309,6 +377,20 @@ def main():
         print("-" * 60)
         print(f"{'AVERAGE':<25} {avg_tps:>10.1f} {avg_ttft:>10.0f} {avg_latency:>12.1f}")
 
+    # Concurrent batch testing
+    batch_results = []
+    if not args.quick:
+        print(f"\n{'='*60}")
+        print("CONCURRENT BATCH TESTING (Continuous Batching)")
+        print(f"{'='*60}")
+
+        for num_concurrent in [2, 4, 8]:
+            result = run_concurrent_benchmark(args.url, num_concurrent, max_tokens=50)
+            batch_results.append(result)
+            print(f"    {num_concurrent} concurrent: {result['throughput_tok_per_s']:.1f} tok/s total, "
+                  f"{result['throughput_req_per_s']:.2f} req/s, "
+                  f"{result['avg_latency_s']*1000:.0f}ms avg latency")
+
     # Save results
     if args.output:
         os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
@@ -325,6 +407,8 @@ def main():
                 "latency_per_token_ms": avg_latency if results else 0,
             },
         }
+        if not args.quick and batch_results:
+            output_data["batch_results"] = batch_results
         with open(args.output, "w") as f:
             json.dump(output_data, f, indent=2)
         print(f"\nResults saved to {args.output}")
