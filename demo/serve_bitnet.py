@@ -21,12 +21,21 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
-# Try to import BitNet kernels
+# Try to import BitNet kernels - FAIL LOUDLY if not available
 try:
     from sgl_kernel.quantization import bitnet_check_kernel_available
     BITNET_KERNEL_AVAILABLE = bitnet_check_kernel_available()
-except ImportError:
-    BITNET_KERNEL_AVAILABLE = False
+    if not BITNET_KERNEL_AVAILABLE:
+        raise RuntimeError(
+            "BitNet native kernels not available! "
+            "Build sgl-kernel with: cd extern/sglang-bitnet/sgl-kernel && uv pip install -e . --no-build-isolation"
+        )
+except ImportError as e:
+    raise ImportError(
+        f"sgl_kernel not installed! "
+        f"Build sgl-kernel with: cd extern/sglang-bitnet/sgl-kernel && uv pip install -e . --no-build-isolation\n"
+        f"Original error: {e}"
+    ) from e
 
 # Try to import kernel patcher
 try:
