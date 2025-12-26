@@ -92,6 +92,7 @@ def load_model(model_id: str, use_native_kernels: bool = True):
         model_id,
         torch_dtype=torch.bfloat16,
         device_map="cpu",
+        low_cpu_mem_usage=True,
     )
     model_name = model_id
     print(f"Model loaded. Device: {model.device}")
