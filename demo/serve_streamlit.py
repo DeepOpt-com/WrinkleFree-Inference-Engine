@@ -4,31 +4,27 @@
 Run: uv run streamlit run demo/serve_streamlit.py --server.port 7860
 """
 
-import sys
-from pathlib import Path
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
 import time
-import numpy as np
 import streamlit as st
-from transformers import AutoTokenizer
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from threading import Thread
 
 
 @st.cache_resource
 def load_model():
     """Load model and tokenizer (cached)."""
-    from wrinklefree_inference.models.bitnet import load_model as load_bitnet
+    model_id = "microsoft/bitnet-b1.58-2B-4T"
 
     with st.spinner("Loading tokenizer..."):
-        tokenizer = AutoTokenizer.from_pretrained(
-            "microsoft/BitNet-b1.58-2B-4T",
-            trust_remote_code=True,
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    with st.spinner("Loading BitNet-2B model (this takes ~45s)..."):
-        model = load_bitnet("microsoft/BitNet-b1.58-2B-4T")
+    with st.spinner("Loading BitNet-2B model (this takes ~30s)..."):
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch.bfloat16,
+            device_map="cpu",
+        )
 
     return model, tokenizer
 
@@ -36,72 +32,58 @@ def load_model():
 def generate_streaming(model, tokenizer, prompt: str, max_tokens: int, temperature: float):
     """Generate tokens with streaming output."""
     # Format as chat
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {"role": "system", "content": "You are a helpful AI assistant."},
+        {"role": "user", "content": prompt},
+    ]
     formatted = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
         add_generation_prompt=True,
     )
 
-    # Tokenize
-    input_ids = tokenizer.encode(formatted, return_tensors="np")[0]
+    inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
 
-    # Track generation
-    tokens = list(input_ids)
-    generated_text = ""
-    total_time = 0
-    num_generated = 0
+    # Set up streamer
+    streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True, skip_prompt=True)
 
-    # Streaming placeholder
+    # Generation kwargs
+    gen_kwargs = {
+        **inputs,
+        "max_new_tokens": max_tokens,
+        "do_sample": temperature > 0.01,
+        "temperature": max(temperature, 0.01),
+        "top_p": 0.9,
+        "streamer": streamer,
+    }
+
+    # Start generation in background thread
+    thread = Thread(target=model.generate, kwargs=gen_kwargs)
+    thread.start()
+
+    # Stream output
     output_placeholder = st.empty()
     stats_placeholder = st.empty()
+    generated_text = ""
+    num_tokens = 0
+    start_time = time.perf_counter()
 
-    for _ in range(max_tokens):
-        start = time.perf_counter()
-
-        # Forward pass on last token
-        last_token = np.array([tokens[-1]])
-        logits = model.forward(last_token)
-
-        if logits.ndim > 1:
-            logits = logits[-1]
-
-        elapsed = time.perf_counter() - start
-        total_time += elapsed
-
-        # Sample
-        logits = logits / max(temperature, 0.1)
-        logits = logits - logits.max()
-        probs = np.exp(logits) / np.exp(logits).sum()
-
-        # Top-k sampling
-        top_k = 40
-        top_indices = np.argsort(probs)[-top_k:]
-        top_probs = probs[top_indices]
-        top_probs = top_probs / top_probs.sum()
-
-        next_token = int(np.random.choice(top_indices, p=top_probs))
-        tokens.append(next_token)
-        num_generated += 1
-
-        # Decode incrementally
-        new_text = tokenizer.decode([next_token], skip_special_tokens=False)
-
-        # Check for EOS
-        if next_token == tokenizer.eos_token_id or "<|eot_id|>" in new_text:
-            break
-
+    for new_text in streamer:
         generated_text += new_text
+        num_tokens += 1
+        elapsed = time.perf_counter() - start_time
+        tok_per_sec = num_tokens / elapsed if elapsed > 0 else 0
 
-        # Update display
         output_placeholder.markdown(f"**Assistant:** {generated_text}▌")
-        tok_per_sec = num_generated / total_time if total_time > 0 else 0
-        stats_placeholder.caption(f"Generated {num_generated} tokens @ {tok_per_sec:.1f} tok/s")
+        stats_placeholder.caption(f"Generated {num_tokens} tokens @ {tok_per_sec:.1f} tok/s")
 
-    # Final update (remove cursor)
+    thread.join()
+
+    # Final update
+    elapsed = time.perf_counter() - start_time
+    tok_per_sec = num_tokens / elapsed if elapsed > 0 else 0
     output_placeholder.markdown(f"**Assistant:** {generated_text}")
-    tok_per_sec = num_generated / total_time if total_time > 0 else 0
-    stats_placeholder.caption(f"Generated {num_generated} tokens in {total_time:.2f}s ({tok_per_sec:.1f} tok/s)")
+    stats_placeholder.caption(f"Generated {num_tokens} tokens in {elapsed:.2f}s ({tok_per_sec:.1f} tok/s)")
 
     return generated_text
 
@@ -114,7 +96,7 @@ def main():
     )
 
     st.title("🧠 BitNet-b1.58-2B-4T Chat")
-    st.caption("1.58-bit ternary weights | Native AVX2 kernels | Streaming generation")
+    st.caption("1.58-bit ternary weights | Transformers backend | Streaming generation")
 
     # Load model
     model, tokenizer = load_model()
@@ -123,14 +105,14 @@ def main():
     with st.sidebar:
         st.header("Settings")
         max_tokens = st.slider("Max tokens", 10, 500, 100, step=10)
-        temperature = st.slider("Temperature", 0.1, 2.0, 0.7, step=0.1)
+        temperature = st.slider("Temperature", 0.0, 2.0, 0.7, step=0.1)
 
         st.divider()
         st.header("Model Info")
         st.write(f"**Layers:** {model.config.num_hidden_layers}")
         st.write(f"**Hidden:** {model.config.hidden_size}")
         st.write(f"**Vocab:** {model.config.vocab_size:,}")
-        st.write(f"**Threads:** {model.kernel.num_threads()}")
+        st.write(f"**Device:** {model.device}")
 
         st.divider()
         if st.button("Clear chat"):

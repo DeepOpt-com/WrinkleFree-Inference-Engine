@@ -1,5 +1,70 @@
 # WrinkleFree Inference Engine - Research Notebook
 
+## 2024-12-25: sglang-bitnet Integration Status
+
+### Current State
+
+**Working paths:**
+1. **Transformers** - Full model inference works with `AutoModelForCausalLM`
+2. **Our Python backend** - `src/wrinklefree_inference/sglang_backend/bitnet_quantization.py`
+
+**Blocked:**
+- sglang-bitnet native kernel (`sgl-kernel`) requires CMake build which fails on Desktop
+- Need CUDA toolkit or specific build dependencies
+
+### Quick Start (Working)
+
+```bash
+# Using transformers (simplest, works immediately)
+uv run python test_inference.py
+
+# Output: Coherent text generation at ~2 tok/s on CPU
+```
+
+### Model Conversion
+
+The HuggingFace model already has packed 1.58-bit weights:
+```bash
+uv run python scripts/convert_to_sglang.py --model microsoft/bitnet-b1.58-2B-4T
+```
+
+Outputs `models/bitnet-b1.58-2B-4T/sglang/` with:
+- 210 packed uint8 weight tensors
+- 210 scale tensors
+- config.json with quantization_config
+
+### Weight Format
+
+```python
+# Packed weights: 4 ternary values per uint8 byte
+# Encoding: 00=-1, 01=0, 10=+1 (2 bits each)
+weight.dtype  # torch.uint8
+weight.shape  # (out_features, in_features // 4)
+
+# Scale per tensor
+scale.dtype   # torch.bfloat16
+scale.shape   # (1,)
+
+# Dequantization produces {-scale, 0, +scale}
+```
+
+### Next Steps
+
+1. **Build sgl-kernel on GPU machine** - Native SIMD kernels for 10x speedup
+2. **Integrate with SGLang server** - OpenAI-compatible API
+3. **Add to WrinkleFree-Deployer** - Cloud deployment configs
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `scripts/convert_to_sglang.py` | HF → sglang format |
+| `src/wrinklefree_inference/sglang_backend/bitnet_quantization.py` | Python kernels |
+| `extern/sglang-bitnet/sgl-kernel/` | Native kernels (needs build) |
+| `test_inference.py` | Working inference test |
+
+---
+
 ## 2024-12-23: BitNet SGLang Integration - Performance Optimization
 
 ### Objective

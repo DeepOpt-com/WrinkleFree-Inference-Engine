@@ -118,9 +118,44 @@ uv run wrinklefree-inference serve -m model.gguf -c 4096 --port 8080
 INFERENCE_URL=http://localhost:8080 uv run python scripts/run_eval.py
 ```
 
+## Streamlit Chat Interface
+
+Run the interactive chat demo:
+```bash
+uv run streamlit run demo/serve_streamlit.py --server.port 7860 --server.address 0.0.0.0
+```
+
+Demo features:
+- Streaming token generation
+- Top-k sampling with configurable temperature
+- Model info display (layers, hidden size, vocab size)
+- ~45s model load time on first access
+
+## sglang-bitnet
+
+The `extern/sglang-bitnet` submodule provides SGLang integration for BitNet models.
+
+```bash
+# Initialize submodule
+git submodule update --init extern/sglang-bitnet
+
+# Install sglang with bitnet support
+cd extern/sglang-bitnet
+pip install -e "python[all]"
+
+# Launch server (example)
+python -m sglang.launch_server --model-path microsoft/BitNet-b1.58-2B-4T
+```
+
+Key sglang-bitnet components:
+- `python/sglang/srt/` - SGLang runtime
+- `benchmark/` - Benchmarking scripts
+- `examples/runtime/` - Usage examples
+
 ## Notes
 
 - BitNet.cpp is a submodule at `extern/BitNet/` - run `git submodule update --init` if missing
+- sglang-bitnet is at `extern/sglang-bitnet/` - fork with BitNet kernel support
 - Models are stored in `extern/BitNet/models/<model-name>/`
 - GGUF files are ~500MB for 2B model
 - Server requires 120s startup time for model loading
