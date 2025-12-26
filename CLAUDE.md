@@ -105,19 +105,30 @@ INFERENCE_URL=http://localhost:30000 uv run pytest tests/ -v -m integration
 **IMPORTANT**: We use a custom fork of SGLang at `extern/sglang-bitnet/`, NOT the upstream sglang package.
 This fork includes native SIMD kernels (AVX2/AVX512) for BitNet inference. Do not install sglang from PyPI.
 
-### Building sgl-kernel (CPU-only)
+**Run on Desktop**: Heavy builds and server runs should be done on Desktop (ssh Desktop), not locally.
+
+### Full CPU-only Setup (one-time)
 
 ```bash
-# Initialize submodule
+# 1. Initialize submodule
 git submodule update --init extern/sglang-bitnet
 
-# Install CPU-only torch first
-uv pip install --reinstall torch --index-url https://download.pytorch.org/whl/cpu
+# 2. Install CPU-only PyTorch
+.venv/bin/pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# Build sgl-kernel
-cd extern/sglang-bitnet/sgl-kernel
-uv pip install scikit-build-core cmake ninja
-uv pip install -e . --no-build-isolation
+# 3. Install vllm CPU stub (provides fallback ops without CUDA)
+.venv/bin/pip install -e extern/vllm-cpu-stub
+
+# 4. Install sglang from our fork
+.venv/bin/pip install -e extern/sglang-bitnet/python
+
+# 5. Build sgl-kernel with BitNet kernels
+.venv/bin/pip install scikit-build-core cmake ninja
+.venv/bin/pip install -e extern/sglang-bitnet/sgl-kernel --no-build-isolation
+
+# 6. Copy .so to source dir (required for editable install)
+cp .venv/lib/python3.12/site-packages/sgl_kernel/common_ops.*.so \
+   extern/sglang-bitnet/sgl-kernel/python/sgl_kernel/
 ```
 
 ### Verify BitNet Kernels
@@ -125,6 +136,14 @@ uv pip install -e . --no-build-isolation
 ```python
 from sgl_kernel.quantization import bitnet_check_kernel_available
 print(bitnet_check_kernel_available())  # Should be True
+```
+
+### Start Server
+
+```bash
+.venv/bin/python -m sglang.launch_server \
+    --model-path microsoft/bitnet-b1.58-2B-4T \
+    --port 30000 --device cpu
 ```
 
 ## Notes
