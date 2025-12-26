@@ -5,8 +5,8 @@ This file provides guidance to Claude Code when working with this repository.
 ## Project Overview
 
 WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
-- **Inference**: BitNet.cpp (extern/BitNet submodule)
-- **Conversion**: HuggingFace → GGUF pipeline
+- **Primary Backend**: SGLang-BitNet with native SIMD kernels (AVX2/AVX512)
+- **Conversion**: HuggingFace → packed weights (on-the-fly)
 - **Validation**: KV cache behavior testing
 - **Deployment**: Via WrinkleFree-Deployer (GCP C3D, H3, RunPod)
 
@@ -16,36 +16,53 @@ WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
 # Install dependencies
 uv sync
 
-# Convert a model
-uv run wrinklefree-inference convert --hf-repo microsoft/BitNet-b1.58-2B-4T
+# Build sgl-kernel (one-time)
+cd extern/sglang-bitnet/sgl-kernel
+uv pip install -e . --no-build-isolation
 
-# Serve the model
-uv run wrinklefree-inference serve -m extern/BitNet/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+# Start SGLang server
+./scripts/launch_sglang_bitnet.sh
 
-# Test generation
-curl http://localhost:8080/completion -d '{"prompt": "Hello", "n_predict": 10}'
+# Start Streamlit chat UI
+uv run streamlit run demo/serve_sglang.py --server.port 7860
+
+# Or test via curl
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
 ```
 
 ## Architecture
 
 ```
-src/wrinklefree_inference/
-├── server/bitnet_server.py   # BitNetServer - subprocess manager for BitNet.cpp
-├── client/bitnet_client.py   # BitNetClient - HTTP client (sync + async)
-├── converter/
-│   ├── hf_to_gguf.py        # Download from HF, convert to GGUF
-│   └── gguf_converter.py    # Convert trained PyTorch models
-└── kv_cache/validator.py    # KV cache validation tests
+# Primary serving stack
+extern/sglang-bitnet/
+├── python/sglang/srt/models/bitnet.py    # BitNet model with weight packing
+├── sgl-kernel/                            # Native SIMD kernels (AVX2/AVX512)
+│   ├── csrc/bitnet/                       # C++ kernel implementations
+│   └── python/sgl_kernel/quantization/    # Python bindings
+
+# Demo and scripts
+demo/
+├── serve_sglang.py                        # Primary: SGLang streaming frontend
+└── archive/                               # Deprecated implementations
+
+scripts/
+└── launch_sglang_bitnet.sh               # Server launch script
+
+# Legacy (reference only)
+extern/BitNet/                             # Microsoft BitNet.cpp (reference)
 ```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `extern/BitNet/run_inference_server.py` | BitNet.cpp server script |
-| `extern/BitNet/setup_env.py` | Model download + compilation |
-| `../WrinkleFree-Deployer/skypilot/inference/` | Deployment configs (GCP, RunPod) |
-| `tests/test_kv_cache.py` | KV cache validation tests |
+| `demo/serve_sglang.py` | Primary Streamlit chat UI |
+| `scripts/launch_sglang_bitnet.sh` | SGLang server launch script |
+| `extern/sglang-bitnet/python/sglang/srt/models/bitnet.py` | BitNet model with weight packing |
+| `extern/sglang-bitnet/sgl-kernel/` | Native SIMD kernels |
+| `extern/BitNet/` | Reference implementation (do not serve) |
 
 ## Common Tasks
 
@@ -122,18 +139,22 @@ INFERENCE_URL=http://localhost:8080 uv run python scripts/run_eval.py
 
 Run the interactive chat demo:
 ```bash
-uv run streamlit run demo/serve_streamlit.py --server.port 7860 --server.address 0.0.0.0
+# Start SGLang server first
+./scripts/launch_sglang_bitnet.sh
+
+# Then start Streamlit
+uv run streamlit run demo/serve_sglang.py --server.port 7860 --server.address 0.0.0.0
 ```
 
 Demo features:
-- Streaming token generation
-- Top-k sampling with configurable temperature
-- Model info display (layers, hidden size, vocab size)
-- ~45s model load time on first access
+- SSE streaming token generation
+- Connects to SGLang backend (OpenAI-compatible API)
+- Token/sec stats display
+- Server health monitoring
 
 ## sglang-bitnet and Native Kernels
 
-The `extern/sglang-bitnet` submodule provides SGLang integration with native SIMD kernels for BitNet.
+The `extern/sglang-bitnet` submodule provides SGLang with native SIMD kernels for BitNet.
 
 ### Building sgl-kernel (CPU-only)
 
@@ -142,16 +163,12 @@ The `extern/sglang-bitnet` submodule provides SGLang integration with native SIM
 git submodule update --init extern/sglang-bitnet
 
 # Install CPU-only torch first
-cd /path/to/project
 uv pip install --reinstall torch --index-url https://download.pytorch.org/whl/cpu
 
 # Build sgl-kernel
 cd extern/sglang-bitnet/sgl-kernel
 uv pip install scikit-build-core cmake ninja
 uv pip install -e . --no-build-isolation
-
-# Copy .so to source dir for editable installs
-cp .venv/.../sgl_kernel/common_ops.*.so python/sgl_kernel/
 ```
 
 ### Verify BitNet Kernels
@@ -161,19 +178,19 @@ from sgl_kernel.quantization import bitnet_check_kernel_available
 print(bitnet_check_kernel_available())  # Should be True
 ```
 
-### Standalone BitNet Server
+### Launch Server
 
 ```bash
-# Start OpenAI-compatible server
-uv run python demo/serve_bitnet.py --port 30000
+# Use the launch script (recommended)
+./scripts/launch_sglang_bitnet.sh
 
-# Test
-curl http://localhost:30000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+# Or manually
+python -m sglang.launch_server \
+    --model-path microsoft/bitnet-b1.58-2B-4T \
+    --port 30000 --host 0.0.0.0 --device cpu
 ```
 
-### Kernel Benchmarks
+### Kernel Performance
 
 Native SIMD kernels (AVX2/AVX512) provide significant speedups:
 - GEMV (batch=1): ~10x faster than torch
@@ -183,17 +200,10 @@ Native SIMD kernels (AVX2/AVX512) provide significant speedups:
 uv run python scripts/benchmark_kernels.py
 ```
 
-Key components:
-- `sgl-kernel/csrc/bitnet/` - Native SIMD kernels (AVX2/AVX512/NEON)
-- `src/wrinklefree_inference/kernels/` - Weight repacking, model patching
-- `demo/serve_bitnet.py` - Standalone FastAPI server
-
 ## Notes
 
-- BitNet.cpp is a submodule at `extern/BitNet/` - run `git submodule update --init` if missing
-- sglang-bitnet is at `extern/sglang-bitnet/` - fork with BitNet kernel support
-- Models are stored in `extern/BitNet/models/<model-name>/`
-- GGUF files are ~500MB for 2B model
-- Server requires 120s startup time for model loading
-- Use `i2_s` quantization for CPU-optimized inference
+- **Primary backend**: sglang-bitnet at `extern/sglang-bitnet/`
+- **Reference only**: BitNet.cpp at `extern/BitNet/` (do not serve)
+- HuggingFace models are automatically packed on-the-fly during loading
+- Server uses OpenAI-compatible API (`/v1/chat/completions`)
 - MoE models use llama.cpp's expert packing format
