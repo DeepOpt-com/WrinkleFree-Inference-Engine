@@ -131,26 +131,62 @@ Demo features:
 - Model info display (layers, hidden size, vocab size)
 - ~45s model load time on first access
 
-## sglang-bitnet
+## sglang-bitnet and Native Kernels
 
-The `extern/sglang-bitnet` submodule provides SGLang integration for BitNet models.
+The `extern/sglang-bitnet` submodule provides SGLang integration with native SIMD kernels for BitNet.
+
+### Building sgl-kernel (CPU-only)
 
 ```bash
 # Initialize submodule
 git submodule update --init extern/sglang-bitnet
 
-# Install sglang with bitnet support
-cd extern/sglang-bitnet
-pip install -e "python[all]"
+# Install CPU-only torch first
+cd /path/to/project
+uv pip install --reinstall torch --index-url https://download.pytorch.org/whl/cpu
 
-# Launch server (example)
-python -m sglang.launch_server --model-path microsoft/BitNet-b1.58-2B-4T
+# Build sgl-kernel
+cd extern/sglang-bitnet/sgl-kernel
+uv pip install scikit-build-core cmake ninja
+uv pip install -e . --no-build-isolation
+
+# Copy .so to source dir for editable installs
+cp .venv/.../sgl_kernel/common_ops.*.so python/sgl_kernel/
 ```
 
-Key sglang-bitnet components:
-- `python/sglang/srt/` - SGLang runtime
-- `benchmark/` - Benchmarking scripts
-- `examples/runtime/` - Usage examples
+### Verify BitNet Kernels
+
+```python
+from sgl_kernel.quantization import bitnet_check_kernel_available
+print(bitnet_check_kernel_available())  # Should be True
+```
+
+### Standalone BitNet Server
+
+```bash
+# Start OpenAI-compatible server
+uv run python demo/serve_bitnet.py --port 30000
+
+# Test
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+```
+
+### Kernel Benchmarks
+
+Native SIMD kernels (AVX2/AVX512) provide significant speedups:
+- GEMV (batch=1): ~10x faster than torch
+- Large dims: ~47x faster
+
+```bash
+uv run python scripts/benchmark_kernels.py
+```
+
+Key components:
+- `sgl-kernel/csrc/bitnet/` - Native SIMD kernels (AVX2/AVX512/NEON)
+- `src/wrinklefree_inference/kernels/` - Weight repacking, model patching
+- `demo/serve_bitnet.py` - Standalone FastAPI server
 
 ## Notes
 
