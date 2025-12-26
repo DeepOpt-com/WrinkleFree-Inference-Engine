@@ -1,13 +1,6 @@
 # WrinkleFree Inference Engine
 
-BitNet model inference engine with KV caching optimization. Serves 1.58-bit quantized models using BitNet.cpp for efficient CPU inference.
-
-## Features
-
-- **HuggingFace to GGUF conversion** - Download and convert models automatically
-- **BitNet.cpp serving** - Optimized CPU inference with AVX512 support
-- **KV cache validation** - Verify caching behavior and performance
-- **RunPod deployment** - Ready-to-use SkyPilot configurations
+Serving layer for 1.58-bit quantized LLMs using **SGLang-BitNet** with native SIMD kernels (AVX2/AVX512).
 
 ## Quick Start
 
@@ -15,164 +8,89 @@ BitNet model inference engine with KV caching optimization. Serves 1.58-bit quan
 # Install dependencies
 uv sync
 
-# Convert a model from HuggingFace
-uv run wrinklefree-inference convert --hf-repo microsoft/BitNet-b1.58-2B-4T
+# Build sgl-kernel (one-time setup)
+cd extern/sglang-bitnet/sgl-kernel
+uv pip install -e . --no-build-isolation
+cd ../../..
 
-# Start the inference server
-uv run wrinklefree-inference serve --model extern/BitNet/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+# Start SGLang server
+./scripts/launch_sglang_bitnet.sh
 
-# Generate text
-uv run wrinklefree-inference generate --prompt "The future of AI is"
-
-# Validate KV cache
-uv run wrinklefree-inference validate
+# Start Streamlit chat UI (in another terminal)
+uv run streamlit run demo/serve_sglang.py --server.port 7860
 ```
 
-## Installation
+Access the chat interface at `http://localhost:7860`
 
-```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/DeepOpt-com/WrinkleFree-Inference-Engine.git
-cd WrinkleFree-Inference-Engine
+## Features
 
-# Install dependencies
-uv sync
+- **SGLang-BitNet backend** - Optimized serving with native SIMD kernels
+- **Streamlit chat UI** - Interactive chat interface with streaming
+- **OpenAI-compatible API** - Standard `/v1/chat/completions` endpoint
+- **HuggingFace integration** - Direct model loading (no conversion needed)
 
-# Setup BitNet (compiles inference engine)
-uv run python extern/BitNet/setup_env.py --hf-repo microsoft/BitNet-b1.58-2B-4T -q i2_s
+## Architecture
+
+```
+demo/
+└── serve_sglang.py          # Streamlit chat frontend
+
+scripts/
+└── launch_sglang_bitnet.sh  # Server launch script
+
+extern/
+├── sglang-bitnet/           # SGLang with BitNet support
+│   ├── python/sglang/       # SGLang Python package
+│   └── sgl-kernel/          # Native SIMD kernels
+└── BitNet/                  # Microsoft BitNet.cpp (reference)
+
+src/wrinklefree_inference/
+├── sglang_backend/          # SGLang integration utilities
+├── kernels/                 # Kernel wrappers
+├── kv_cache/                # KV cache utilities
+├── client/                  # API client
+└── moe/                     # MoE support
 ```
 
-## CLI Commands
+## API Usage
 
-| Command | Description |
-|---------|-------------|
-| `convert` | Convert HuggingFace model to GGUF |
-| `serve` | Start inference server |
-| `generate` | Generate text from prompt |
-| `validate` | Run KV cache validation |
-| `list-models` | List available GGUF models |
-| `benchmark-cost` | Run cost benchmarking |
-| `naive-convert` | Naive ternary conversion (for benchmarking) |
-| `chat` | Launch Streamlit chat interface |
-
-## Cloud Deployment
-
-Deployment configs are in [WrinkleFree-Deployer/skypilot/inference/](../WrinkleFree-Deployer/skypilot/inference/).
+The server exposes an OpenAI-compatible API:
 
 ```bash
-# From WrinkleFree-Deployer directory
-cd ../WrinkleFree-Deployer
-source .venv/bin/activate
-
-# GCP C3D (recommended for production - AMD EPYC Genoa, DDR5)
-sky launch skypilot/inference/gcp_c3d.yaml -y --cluster ie-c3d
-
-# GCP H3 (Intel alternative)
-sky launch skypilot/inference/gcp_h3.yaml -y --cluster ie-h3
-
-# RunPod (development)
-sky launch skypilot/inference/runpod_cpu.yaml -y --cluster ie-runpod
-
-# Get endpoint and test
-ENDPOINT=$(sky status ie-c3d --endpoint 8080)
-curl $ENDPOINT/health
-
-# Teardown
-sky down ie-c3d -y
-```
-
-### Instance Comparison
-
-| Instance | CPU | Memory BW | vCPUs | RAM | Cost/hr |
-|----------|-----|-----------|-------|-----|---------|
-| GCP C3D-90 | AMD EPYC Genoa | ~460 GB/s | 90 | 360 GB | ~$4.00 |
-| GCP H3-88 | Intel Sapphire | ~307 GB/s | 88 | 352 GB | ~$1.76 |
-| RunPod A40 | Varies + GPU | ~696 GB/s | 16+ | 128+ GB | ~$0.80 |
-
-## API Endpoints
-
-The server exposes these endpoints (OpenAI-compatible):
-
-- `GET /health` - Health check
-- `POST /completion` - Text completion
-- `POST /tokenize` - Tokenize text
-- `POST /detokenize` - Detokenize tokens
-
-### Example Request
-
-```bash
-curl http://localhost:8080/completion \
+# Chat completion
+curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "The capital of France is",
-    "n_predict": 50,
-    "temperature": 0.7
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 100,
+    "stream": true
   }'
+
+# List models
+curl http://localhost:30000/v1/models
 ```
 
-## KV Cache Validation
+## Configuration
 
-The engine includes tools to validate KV caching behavior:
+Environment variables for `launch_sglang_bitnet.sh`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SGLANG_MODEL` | `microsoft/bitnet-b1.58-2B-4T` | Model to load |
+| `SGLANG_PORT` | `30000` | Server port |
+| `SGLANG_HOST` | `0.0.0.0` | Server host |
+
+## Kernel Performance
+
+Native SIMD kernels provide significant speedups over PyTorch:
 
 ```bash
-# Run validation suite
-uv run wrinklefree-inference validate --url http://localhost:8080
-
-# Run specific tests
-uv run pytest tests/test_kv_cache.py -v
+# Benchmark kernels
+uv run python scripts/benchmark_kernels.py
 ```
 
-Validation checks:
-- **Prefix caching** - Same prefix should speed up subsequent requests
-- **Context limits** - Graceful handling at context window boundary
-- **Continuous batching** - Concurrent requests should succeed
-
-## Cost Benchmarking
-
-Benchmark inference cost efficiency across different hardware configurations:
-
-```bash
-# Install benchmark dependencies
-uv sync --extra benchmark
-
-# Run local benchmark (requires running server)
-uv run wrinklefree-inference benchmark-cost \
-    --url http://localhost:8080 \
-    --hardware a40 \
-    --model bitnet-2b-4t
-
-# Run cloud benchmark on RunPod
-sky launch skypilot/benchmark/runpod_a40_benchmark.yaml -y
-sky launch skypilot/benchmark/runpod_cpu_64core.yaml -y
-```
-
-For naive ternary conversion (low quality, for cost analysis only):
-
-```bash
-uv sync --extra convert
-uv run wrinklefree-inference naive-convert \
-    --model-id meta-llama/Llama-3.1-70B \
-    --estimate-only
-```
-
-See [docs/cost-benchmark.md](docs/cost-benchmark.md) for detailed methodology.
-
-## Project Structure
-
-```
-WrinkleFree-Inference-Engine/
-├── src/wrinklefree_inference/
-│   ├── server/          # BitNet server wrapper
-│   ├── client/          # Python client (sync + async)
-│   ├── converter/       # HF to GGUF conversion
-│   └── kv_cache/        # KV cache validation
-├── benchmark/           # Cost benchmarking module
-├── scripts/             # CLI scripts
-├── configs/             # Hydra configs
-├── skypilot/            # RunPod deployment configs
-├── tests/               # pytest test suite
-└── extern/BitNet/       # BitNet.cpp submodule
-```
+- GEMV (batch=1): ~10x faster
+- Large dims: ~47x faster
 
 ## Development
 
@@ -181,19 +99,27 @@ WrinkleFree-Inference-Engine/
 uv sync --all-extras
 
 # Run tests
-uv run pytest
+uv run pytest tests/ -v
 
-# Run linting
-uv run ruff check src/
-
-# Run type checking
-uv run mypy src/
+# Validate KV cache behavior
+uv run python scripts/validate_kv_cache.py --url http://localhost:30000
 ```
 
-## Dependencies
+## Cloud Deployment
 
-- **BitNet.cpp** - Microsoft's optimized 1.58-bit inference engine
-- **WrinkleFree-Deployer** - Cloud deployment infrastructure (optional)
+See [WrinkleFree-Deployer](../WrinkleFree-Deployer) for SkyPilot configurations:
+
+```bash
+# GCP C3D (recommended)
+sky launch skypilot/inference/gcp_c3d.yaml -y --cluster ie-c3d
+
+# RunPod (development)
+sky launch skypilot/inference/runpod_cpu.yaml -y --cluster ie-runpod
+```
+
+## Legacy Components
+
+Archived code (BitNet.cpp integration, CLI tools, benchmarks) is in `legacy/`. See `legacy/README.md` for details.
 
 ## License
 
