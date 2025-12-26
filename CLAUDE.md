@@ -102,7 +102,8 @@ INFERENCE_URL=http://localhost:30000 uv run pytest tests/ -v -m integration
 
 ## sglang-bitnet Setup
 
-The `extern/sglang-bitnet` submodule provides SGLang with native SIMD kernels for BitNet.
+**IMPORTANT**: We use a custom fork of SGLang at `extern/sglang-bitnet/`, NOT the upstream sglang package.
+This fork includes native SIMD kernels (AVX2/AVX512) for BitNet inference. Do not install sglang from PyPI.
 
 ### Building sgl-kernel (CPU-only)
 
@@ -128,7 +129,7 @@ print(bitnet_check_kernel_available())  # Should be True
 
 ## Notes
 
-- **Primary backend**: sglang-bitnet at `extern/sglang-bitnet/`
+- **Custom SGLang fork**: We use `extern/sglang-bitnet/` (custom fork with BitNet kernels), NOT upstream sglang
 - **Reference only**: BitNet.cpp at `extern/BitNet/` (do not serve)
 - HuggingFace models are automatically packed on-the-fly during loading
 - Server uses OpenAI-compatible API (`/v1/chat/completions`)
