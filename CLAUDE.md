@@ -5,11 +5,38 @@ This file provides guidance to Claude Code when working with this repository.
 ## Project Overview
 
 WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
-- **Primary Backend**: SGLang-BitNet with native SIMD kernels (AVX2/AVX512)
+- **Primary Backend**: BitNet.cpp (26+ tok/s) or SGLang-BitNet (16 tok/s)
 - **Frontend**: Streamlit chat UI with SSE streaming
 - **Deployment**: Via WrinkleFree-Deployer (GCP C3D, H3, RunPod)
 
-## Quick Start
+## BitNet.cpp Quick Start (Recommended - 1.6x faster)
+
+```bash
+# Build BitNet.cpp (one-time)
+cd extern/BitNet
+cmake -B build -DBITNET_X86_TL2=ON -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build --config Release -j$(nproc)
+
+# Download pre-converted GGUF model
+huggingface-cli download microsoft/BitNet-b1.58-2B-4T-gguf --local-dir models/BitNet-b1.58-2B-4T
+cd ../..
+
+# Start server (option 1: script)
+./scripts/launch_bitnet_cpp.sh
+
+# Start server (option 2: direct)
+./extern/BitNet/build/bin/llama-server -m extern/BitNet/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf --host 0.0.0.0 --port 8080
+
+# Start Streamlit chat UI (with BitNet.cpp backend)
+BITNET_BACKEND=bitnet_cpp uv run streamlit run demo/serve_sglang.py --server.port 7860
+
+# Test
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "bitnet", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+```
+
+## SGLang Quick Start (Alternative)
 
 ```bash
 # Install dependencies
@@ -160,9 +187,9 @@ SGLang automatically applies this template when using the OpenAI-compatible `/v1
 
 ## Notes
 
+- **BitNet.cpp is recommended** for production (26+ tok/s vs sglang's 16 tok/s)
 - **Custom SGLang fork**: We use `extern/sglang-bitnet/` (custom fork with BitNet kernels), NOT upstream sglang
-- **Chat template**: SGLang applies the model's HuggingFace chat template automatically
-- **Reference only**: BitNet.cpp at `extern/BitNet/` (do not serve)
-- HuggingFace models are automatically packed on-the-fly during loading
-- Server uses OpenAI-compatible API (`/v1/chat/completions`)
-- Legacy code (BitNet.cpp integration, CLI, benchmarks) is in `legacy/`
+- **Chat template**: Both BitNet.cpp and SGLang support OpenAI-compatible chat API
+- HuggingFace models are automatically packed on-the-fly during loading (sglang only)
+- Both servers use OpenAI-compatible API (`/v1/chat/completions`)
+- Legacy code (old BitNet.cpp integration, CLI, benchmarks) is in `legacy/`

@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""Streamlit chat interface using SGLang-BitNet backend.
+"""Streamlit chat interface for BitNet models.
 
-Primary serving interface for BitNet models with native SIMD kernels.
-Connects to SGLang server via OpenAI-compatible API with SSE streaming.
+Supports two backends:
+- bitnet_cpp: Pure C++ backend (BitNet.cpp) - ~26 tok/s, recommended
+- sglang: Python-based backend (SGLang-BitNet) - ~16 tok/s
+
+Environment variables:
+  BITNET_BACKEND - "bitnet_cpp" (default) or "sglang"
+  BITNET_URL - BitNet.cpp server URL (default: http://127.0.0.1:8080)
+  SGLANG_URL - SGLang server URL (default: http://127.0.0.1:30000)
 
 Run:
-  1. Start SGLang server: ./scripts/launch_sglang_bitnet.sh
-  2. Start Streamlit: uv run streamlit run demo/serve_sglang.py --server.port 7860 --server.address 0.0.0.0
+  # BitNet.cpp backend (recommended)
+  1. Start server: ./scripts/launch_bitnet_cpp.sh
+  2. Start Streamlit: BITNET_BACKEND=bitnet_cpp uv run streamlit run demo/serve_sglang.py
+
+  # SGLang backend
+  1. Start server: ./scripts/launch_sglang_bitnet.sh
+  2. Start Streamlit: BITNET_BACKEND=sglang uv run streamlit run demo/serve_sglang.py
 """
 
 import json
@@ -17,8 +28,17 @@ from typing import Generator
 import requests
 import streamlit as st
 
-# SGLang server URL
-SGLANG_URL = os.environ.get("SGLANG_URL", "http://127.0.0.1:30000")
+# Backend selection
+BACKEND = os.environ.get("BITNET_BACKEND", "bitnet_cpp")  # "bitnet_cpp" or "sglang"
+
+# Server URLs based on backend
+if BACKEND == "bitnet_cpp":
+    API_URL = os.environ.get("BITNET_URL", "http://127.0.0.1:8080")
+else:
+    API_URL = os.environ.get("SGLANG_URL", "http://127.0.0.1:30000")
+
+# Legacy compatibility
+SGLANG_URL = API_URL
 
 
 def check_server() -> dict:
@@ -154,19 +174,29 @@ with st.sidebar:
     # Server status
     server_info = check_server()
     if server_info["status"] == "ok":
-        st.success(f"Connected to SGLang")
+        backend_name = "BitNet.cpp" if BACKEND == "bitnet_cpp" else "SGLang"
+        st.success(f"Connected to {backend_name}")
         st.caption(f"Model: {server_info['model']}")
-        st.caption(f"URL: {SGLANG_URL}")
+        st.caption(f"URL: {API_URL}")
     else:
         st.error(f"Server Error: {server_info['message']}")
-        st.info(
-            "Start server with:\n```bash\n./scripts/launch_sglang_bitnet.sh\n```"
-        )
+        if BACKEND == "bitnet_cpp":
+            st.info(
+                "Start server with:\n```bash\n./scripts/launch_bitnet_cpp.sh\n```"
+            )
+        else:
+            st.info(
+                "Start server with:\n```bash\n./scripts/launch_sglang_bitnet.sh\n```"
+            )
 
     st.divider()
 
-    st.caption("Backend: SGLang-BitNet")
-    st.caption("Kernels: AVX2/AVX512 SIMD")
+    if BACKEND == "bitnet_cpp":
+        st.caption("Backend: BitNet.cpp (C++)")
+        st.caption("Performance: ~26 tok/s")
+    else:
+        st.caption("Backend: SGLang-BitNet (Python)")
+        st.caption("Performance: ~16 tok/s")
     st.caption("Quantization: 1.58-bit ternary")
 
 # Initialize chat history
