@@ -3,4 +3,4 @@
 	url = https://github.com/microsoft/BitNet.git
 [submodule "extern/sglang-bitnet"]
 	path = extern/sglang-bitnet
-	url = https://github.com/sgl-project/sglang.git
+	url = git@github.com:DeepOpt-com/sglang-bitnet.git
