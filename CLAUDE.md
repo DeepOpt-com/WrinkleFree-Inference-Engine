@@ -11,20 +11,24 @@ WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
 
 ## BitNet.cpp Quick Start (Recommended - 1.6x faster)
 
-```bash
-# Build BitNet.cpp (one-time)
-cd extern/BitNet
-cmake -B build -DBITNET_X86_TL2=ON -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
-cmake --build build --config Release -j$(nproc)
+**Prerequisites**: `clang` compiler required (`sudo apt install clang`)
 
-# Download pre-converted GGUF model
-huggingface-cli download microsoft/BitNet-b1.58-2B-4T-gguf --local-dir models/BitNet-b1.58-2B-4T
+**Build tip**: Limit parallel jobs to avoid freezing your machine (default uses all cores):
+```bash
+export CMAKE_BUILD_PARALLEL_LEVEL=4  # Use 4 cores instead of all
+```
+
+```bash
+# Build BitNet.cpp (one-time) - uses setup_env.py to generate kernel headers
+cd extern/BitNet
+git submodule update --init --recursive
+python setup_env.py --hf-repo microsoft/BitNet-b1.58-2B-4T -q i2_s
 cd ../..
 
 # Start server (option 1: script)
 ./scripts/launch_bitnet_cpp.sh
 
-# Start server (option 2: direct)
+# Start server (option 2: direct) - model is downloaded to models/ by setup_env.py
 ./extern/BitNet/build/bin/llama-server -m extern/BitNet/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf --host 0.0.0.0 --port 8080
 
 # Start Streamlit chat UI (with BitNet.cpp backend)
@@ -38,10 +42,25 @@ curl http://localhost:8080/v1/chat/completions \
 
 ## Rust Gateway with Native Inference (NEW - Fastest)
 
-Bypasses Python completely for maximum performance:
+Bypasses Python completely for maximum performance.
+
+**Prerequisites**: Build llama.cpp inside sglang-bitnet (gcc/g++ required):
 
 ```bash
-# Build and run Rust gateway with native C++ inference
+# Build llama.cpp (one-time) - self-contained in sglang-bitnet
+cd extern/sglang-bitnet/3rdparty/llama.cpp
+cmake -B build -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build --config Release -j4
+cd ../../../..
+
+# Build Rust gateway
+cd extern/sglang-bitnet/sgl-model-gateway
+cargo build --release --features native-inference -j4
+cd ../../..
+```
+
+```bash
+# Run Rust gateway with native C++ inference
 ./scripts/launch_rust_gateway.sh --native
 
 # Or with gRPC to Python (fallback)
@@ -102,13 +121,16 @@ src/wrinklefree_inference/
 └── moe/                                   # MoE support
 
 extern/
-├── sglang-bitnet/                         # SGLang with native BitNet kernels
+├── sglang-bitnet/                         # SGLang with native BitNet kernels (self-contained)
+│   ├── 3rdparty/llama.cpp/                # llama.cpp fork with BitNet support
+│   ├── include/                           # BitNet kernel headers
+│   ├── src/                               # BitNet kernel sources
 │   ├── sgl-model-gateway/                 # Rust HTTP gateway
 │   │   └── src/inference/                 # Native C++ FFI bindings
 │   ├── sgl-kernel/                        # Native SIMD kernels (AVX2/AVX512)
 │   │   └── csrc/inference/                # C++ inference engine
 │   └── python/sglang/srt/models/bitnet.py # BitNet model (Python)
-└── BitNet/                                # Microsoft BitNet.cpp (reference only)
+└── BitNet/                                # Microsoft BitNet.cpp (reference only, not used by Rust gateway)
 
 legacy/                                    # Archived code (see legacy/README.md)
 ```
@@ -213,9 +235,11 @@ SGLang automatically applies this template when using the OpenAI-compatible `/v1
 
 ## Notes
 
-- **BitNet.cpp is recommended** for production (26+ tok/s vs sglang's 16 tok/s)
+- **Rust Gateway is recommended** for production (26+ tok/s, self-contained in sglang-bitnet)
 - **Custom SGLang fork**: We use `extern/sglang-bitnet/` (custom fork with BitNet kernels), NOT upstream sglang
+- **Self-contained build**: The Rust gateway builds llama.cpp from `sglang-bitnet/3rdparty/llama.cpp`, no external BitNet.cpp dependency
 - **Chat template**: Both BitNet.cpp and SGLang support OpenAI-compatible chat API
 - HuggingFace models are automatically packed on-the-fly during loading (sglang only)
 - Both servers use OpenAI-compatible API (`/v1/chat/completions`)
 - Legacy code (old BitNet.cpp integration, CLI, benchmarks) is in `legacy/`
+- `extern/BitNet/` is kept as reference only - not used by the Rust gateway
