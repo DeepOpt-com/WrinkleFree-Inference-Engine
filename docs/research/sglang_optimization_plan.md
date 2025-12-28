@@ -1,15 +1,28 @@
 # SGLang BitNet Performance Optimization Plan
 
 ## Goal
-Close the 1.7x throughput gap: sglang 16 tok/s → BitNet.cpp 27 tok/s on AMD CPU.
+Close the 1.35x throughput gap: sglang 19.2 tok/s → BitNet.cpp 26 tok/s on AMD CPU.
 
-## Profiling Results (from `scripts/profile_sglang_overhead.py`)
+## Profiling Results (Dec 28, 2025)
 
+### Real-Time Measurements (`scripts/profile_sglang_realtime.py`)
 ```
-Kernel time (measured):       3.34ms → 300 tok/s theoretical
-Actual latency (measured):   62ms → 16 tok/s
-Overhead:                    59ms (94% of time!)
+Kernel time (measured):       3.3ms → 300 tok/s theoretical
+Actual latency (measured):   52.2ms → 19.2 tok/s
+Overhead:                    48.9ms (94% of time)
+
+BitNet.cpp target:           38.5ms → 26 tok/s
+Gap to close:                13.7ms (26% slower than BitNet.cpp)
 ```
+
+### Key Comparison
+| Backend | Throughput | Latency | vs BitNet.cpp |
+|---------|------------|---------|---------------|
+| HuggingFace (unpacked) | 5.1 tok/s | 197ms | 5.1x slower |
+| SGLang + SIMD kernels | 19.2 tok/s | 52.2ms | 1.35x slower |
+| BitNet.cpp | 26.0 tok/s | 38.5ms | Baseline |
+
+**Key insight**: SGLang with SIMD kernels is **3.8x faster** than HuggingFace due to weight packing and SIMD kernels. The remaining gap to BitNet.cpp is Python framework overhead.
 
 ### Overhead Breakdown
 | Component | Time/token | Notes |
@@ -284,21 +297,55 @@ This is the "LMDeploy TurboMind" approach.
 
 | Phase | Target | Throughput | Improvement | Status |
 |-------|--------|------------|-------------|--------|
-| Baseline | Current sglang | 16.11 tok/s | - | Measured |
-| Phase 1 | torch.compile | 18 tok/s | +12% | OOM during graph capture |
-| Phase 2 | C++ decode loop | 24 tok/s | +50% | Deferred |
-| Phase 3 | BitNet.cpp | **26.06 tok/s** | **+62%** | **ACHIEVED** |
+| Baseline | Current sglang | 19.2 tok/s | - | Measured (Dec 28) |
+| Phase 1 | torch.compile | 21 tok/s | +10% | OOM/slow graph capture |
+| Phase 2 | C++ decode loop | 24 tok/s | +25% | Not implemented |
+| Phase 3 | BitNet.cpp | **26.0 tok/s** | **+35%** | **ACHIEVED** |
 
 ### Results (Dec 28, 2025)
-- **Phase 1**: torch.compile causes OOM during graph capture (memory drops from 2.8GB to <1GB)
-  - Fixed `.item()` graph breaks in quantization code
-  - Added BitNet fake ops for torch.compile compatibility
-  - Deferred due to memory constraints
-- **Phase 3**: BitNet.cpp backend implemented and tested
-  - 26.06 tok/s achieved (vs 16.11 sglang baseline)
-  - Added `scripts/launch_bitnet_cpp.sh` launch script
-  - Updated Streamlit frontend with `BITNET_BACKEND` env var
-  - Recommended as production backend
+
+#### Updated Measurements
+- **SGLang baseline**: 19.2 tok/s (52.2ms/token) - improved from earlier 16 tok/s measurement
+- **BitNet.cpp**: 26.0 tok/s (38.5ms/token)
+- **Gap**: 13.7ms (26% slower than BitNet.cpp)
+
+#### Phase 1: torch.compile
+- Graph capture causes OOM or takes >10 minutes
+- Memory drops from 2.8GB to <1GB during capture
+- Fixed `.item()` graph breaks in quantization code
+- Added BitNet fake ops for torch.compile compatibility
+- **Status**: Deferred - impractical for CPU due to memory constraints
+
+#### Phase 3: BitNet.cpp Backend (RECOMMENDED)
+- 26.0 tok/s achieved (1.35x faster than SGLang)
+- Added `scripts/launch_bitnet_cpp.sh` launch script
+- `--cache-reuse 64` enabled by default
+- Updated Streamlit frontend with `BITNET_BACKEND` env var
+- **Conclusion**: Use BitNet.cpp for maximum performance
+
+#### Phase 4: C++ Fused Operations (Attempted)
+- Created `bitnet_mlp_forward_cpu` and `bitnet_qkv_forward_cpu` fused ops
+- **Finding**: No speedup - actually 0.63x slower than unfused Python
+- Existing SIMD kernels already highly optimized
+- Python dispatch overhead is minimal per-op; bottleneck is framework-level
+- The 48.9ms overhead is from HTTP/scheduler/event loop, not individual ops
+
+#### Additional Profiling Insights
+- HuggingFace pure Python: 5.1 tok/s (197ms/token) - very slow due to weight unpacking
+- SGLang SIMD kernels: 3.8x faster than HuggingFace
+- Remaining gap (13.7ms) is framework overhead, not kernel performance
+
+### Recommended Production Setup
+```bash
+# Best performance: BitNet.cpp with cache-reuse (26+ tok/s)
+./scripts/launch_bitnet_cpp.sh  # Uses --cache-reuse 64 by default
+
+# If SGLang features needed (batching, prefix caching): 16 tok/s
+./scripts/launch_sglang_bitnet.sh
+
+# Streamlit UI (works with both backends)
+BITNET_BACKEND=bitnet_cpp uv run streamlit run demo/serve_sglang.py
+```
 
 ## Benchmark Commands (Run on Desktop)
 
@@ -352,6 +399,40 @@ However, Gemini's analysis revealed it targets the wrong bottleneck (<2% of late
 See git history for implementation details.
 
 ---
+
+## Final Conclusion (Dec 28, 2025)
+
+### What We Learned
+
+1. **SGLang SIMD kernels are effective**: 3.8x faster than HuggingFace baseline (19.2 vs 5.1 tok/s)
+
+2. **The remaining gap is framework overhead**: 48.9ms per token comes from:
+   - HTTP server/request handling
+   - Python scheduler and event loop
+   - Tensor allocations for indices/metadata
+   - Type conversions and dispatch overhead
+
+3. **Op-level fusion doesn't help**: C++ fused MLP/QKV ops were slower (0.63x) because:
+   - Existing SIMD kernels are already highly optimized
+   - Adding vector allocation overhead for fused intermediate buffers
+   - The bottleneck is at the framework level, not per-op dispatch
+
+4. **torch.compile is impractical on CPU**: Graph capture consumes too much memory and takes too long
+
+### Recommendations
+
+1. **For maximum performance**: Use BitNet.cpp (26 tok/s)
+   - Pure C++ inference loop eliminates all Python overhead
+   - `--cache-reuse 64` for repeated prompt patterns
+
+2. **For SGLang features**: Accept 19.2 tok/s with current implementation
+   - Batching, prefix caching, continuous batching still valuable for multi-user scenarios
+   - 26% slower than BitNet.cpp is acceptable trade-off for features
+
+3. **Future optimization paths** (if needed):
+   - Implement C++ scheduler bypass for single-request decode
+   - Profile and optimize SGLang's async event loop
+   - Consider Rust-based HTTP layer (like sgl-model-gateway)
 
 ## Sources
 - [SGLang CPU Backend Optimization Roadmap](https://github.com/sgl-project/sglang/issues/8281)

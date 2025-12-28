@@ -1,5 +1,83 @@
 # WrinkleFree Inference Engine - Research Notebook
 
+## 2024-12-28: BitNet.cpp vs sglang Throughput Comparison
+
+### Summary
+
+Comprehensive benchmark comparison between BitNet.cpp (C++/GGUF) and sglang-bitnet (Python/PyTorch).
+
+### System Configuration
+
+- **CPU**: AMD Ryzen 7 7700 8-Core (16 threads)
+- **ISA**: AVX-512, AVX512_VBMI, AVX512_VNNI, AVX512_BF16
+- **Model**: Microsoft BitNet-b1.58-2B-4T (2.4B params, 1.1GB GGUF)
+
+### Throughput Results
+
+| Implementation | Throughput | Latency | Notes |
+|---------------|------------|---------|-------|
+| **BitNet.cpp CLI** | **26.9 tok/s** | 37.2ms | C++ with I2_S quant |
+| **BitNet.cpp HTTP** | **26.2 tok/s** | 38.2ms | OpenAI-compatible API |
+| sglang HTTP server | 16 tok/s | 62ms | Full framework overhead |
+| Direct Python inference | 19 tok/s | 53ms | Bypasses HTTP, still Python |
+| sglang kernel only | 93 tok/s | 10.8ms | Theoretical (no Python loop) |
+
+### Key Findings
+
+1. **BitNet.cpp is 1.7x faster than sglang** (26.9 vs 16 tok/s)
+2. **Python overhead accounts for 80%** of sglang latency (53ms of 62ms)
+3. **BitNet.cpp is consistent with official benchmarks**: Technical report shows 29ms/token (~34.5 tok/s) on Intel i7-13800H; we get 37ms/token (26.9 tok/s) on AMD Ryzen 7 7700
+4. **Thread count has no effect** on BitNet.cpp (4, 8, 16 threads all give 26.9 tok/s) → memory bandwidth limited
+
+### sglang Kernel Breakdown (per token)
+
+```
+GEMV:      9.2ms (7 ops × 30 layers)
+SDPA:      0.9ms
+RMS norm:  0.7ms
+Total:    10.8ms → 93 tok/s theoretical
+```
+
+### Bottleneck Analysis
+
+| Component | Time | % of Total |
+|-----------|------|------------|
+| sglang kernels | 10.8ms | 17% |
+| Python overhead | 42ms | 68% |
+| HTTP/framework | 9ms | 15% |
+
+### Conclusions
+
+- **BitNet.cpp is the fastest option available** on this hardware
+- **sglang kernel speed is excellent** (93 tok/s) but Python overhead kills it
+- **Path to 47+ tok/s**: Either optimize sglang's Python loop (C++ KV cache) OR use BitNet.cpp with proper TL2 kernel tuning
+
+### Recommendations
+
+**For Production Deployment:**
+- Use **BitNet.cpp llama-server** (26.2 tok/s, OpenAI-compatible API)
+- 1.6x faster than sglang with minimal HTTP overhead
+- Single binary deployment, no Python dependencies
+
+**Quick Start:**
+```bash
+cd extern/BitNet
+./build/bin/llama-server -m models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf --host 0.0.0.0 --port 8080
+
+# Test
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "bitnet", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+```
+
+### Next Steps (Optional Optimizations)
+
+1. **Build with clang** - may enable better vectorization
+2. **TL2 kernel codegen** - model-specific tuning for x86_64
+3. **C++ KV cache for sglang** - if PyTorch integration is required
+
+---
+
 ## 2024-12-25: sglang-bitnet Integration - COMPLETED BUILD
 
 ### Summary
@@ -995,6 +1073,48 @@ To match BitNet.cpp's 47 tok/s, we need to eliminate Python overhead:
 | Fused C++ kernels | 80+ tok/s | High |
 
 **Recommendation**: Focus on fixing BitNet.cpp converter (U8 dtype support) as the fastest path to 47+ tok/s.
+
+### BitNet.cpp Converter Progress
+
+**Attempted conversion of microsoft/BitNet-b1.58-2B-4T:**
+
+1. **Patched U8 dtype support** in `convert-ms-to-gguf-bitnet.py`:
+   ```python
+   SAFETENSORS_DATA_TYPES['U8'] = DT_I2  # Map U8 to I2
+   ```
+   Result: U8 KeyError fixed
+
+2. **Fixed vocab type**:
+   ```bash
+   --vocab-type bpe
+   ```
+   Result: Vocab loaded successfully
+
+3. **Skipped unknown tensors**:
+   ```bash
+   --skip-unknown
+   ```
+   Result: Skipped weight_scale, ffn_sub_norm, attn_sub_norm tensors
+
+4. **Final blocker**: GGUF writer doesn't support uint8:
+   ```
+   ValueError: Only F16, F32, F64, I8, I16, I32, I64 tensors are supported for now
+   ```
+
+**Root cause**: HuggingFace model stores **already-packed uint8** weights, but:
+- BitNet.cpp converter expects float weights → quantizes to I2
+- GGUF format doesn't have a uint8 tensor type
+
+**Required changes for full compatibility**:
+1. Add uint8 support to `gguf_writer.py` (in llama.cpp)
+2. Handle weight_scale tensors (per-tensor quantization scales)
+3. Handle new layer types (ffn_sub_norm, attn_sub_norm)
+4. Map packed uint8 format to GGUF I2 format
+
+**Alternative paths**:
+- Find pre-converted GGUF model
+- Build C++ inference loop using sglang kernels
+- Train from scratch with BitNet.cpp-compatible format
 
 ### Scripts Created
 

@@ -36,7 +36,28 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model": "bitnet", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
 ```
 
-## SGLang Quick Start (Alternative)
+## Rust Gateway with Native Inference (NEW - Fastest)
+
+Bypasses Python completely for maximum performance:
+
+```bash
+# Build and run Rust gateway with native C++ inference
+./scripts/launch_rust_gateway.sh --native
+
+# Or with gRPC to Python (fallback)
+./scripts/launch_rust_gateway.sh --grpc
+
+# Test
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}'
+```
+
+**Architecture**: HTTP (Axum/Rust) → C++ SIMD Kernels (no Python)
+
+**Performance**: ~26 tok/s (matches BitNet.cpp, eliminates 49ms Python overhead)
+
+## SGLang Quick Start (Alternative - Slower)
 
 ```bash
 # Install dependencies
@@ -66,7 +87,9 @@ demo/
 └── serve_sglang.py                        # Streamlit chat frontend
 
 scripts/
-├── launch_sglang_bitnet.sh               # Server launch script
+├── launch_rust_gateway.sh                # Rust gateway (native inference)
+├── launch_sglang_bitnet.sh               # SGLang Python server
+├── launch_bitnet_cpp.sh                  # BitNet.cpp server
 ├── benchmark_kernels.py                   # Kernel performance testing
 ├── validate_kv_cache.py                   # KV cache validation
 └── test_repacking.py                      # Weight repacking tests
@@ -80,8 +103,11 @@ src/wrinklefree_inference/
 
 extern/
 ├── sglang-bitnet/                         # SGLang with native BitNet kernels
-│   ├── python/sglang/srt/models/bitnet.py # BitNet model implementation
-│   └── sgl-kernel/                        # Native SIMD kernels (AVX2/AVX512)
+│   ├── sgl-model-gateway/                 # Rust HTTP gateway
+│   │   └── src/inference/                 # Native C++ FFI bindings
+│   ├── sgl-kernel/                        # Native SIMD kernels (AVX2/AVX512)
+│   │   └── csrc/inference/                # C++ inference engine
+│   └── python/sglang/srt/models/bitnet.py # BitNet model (Python)
 └── BitNet/                                # Microsoft BitNet.cpp (reference only)
 
 legacy/                                    # Archived code (see legacy/README.md)

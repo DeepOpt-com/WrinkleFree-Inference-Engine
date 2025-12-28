@@ -53,10 +53,14 @@ echo ""
 echo "API endpoint: http://${HOST}:${PORT}/v1/chat/completions"
 echo ""
 echo "Performance: ~26 tok/s (1.6x faster than sglang)"
+echo "Features:    KV cache reuse for repeated prompts"
 echo ""
 
-# Launch server
+# Launch server with optimizations
+# --cache-reuse 64: Reuse KV cache for prompts sharing 64+ token prefix
+# --n-gpu-layers 0: CPU-only (BitNet is optimized for CPU)
 exec "${BITNET_DIR}/build/bin/llama-server" \
     -m "$MODEL" \
     --host "$HOST" \
-    --port "$PORT"
+    --port "$PORT" \
+    --cache-reuse 64
