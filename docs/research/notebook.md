@@ -810,12 +810,116 @@ attention_sparsity:
 
 ---
 
+## 2024-12-28: Framework Overhead Analysis - Critical Bottleneck Identified
+
+### Objective
+Identify why sglang-bitnet achieves only 16 tok/s when kernels theoretically support 164+ tok/s.
+
+### Key Discovery: 90% Framework Overhead
+
+**Profiling Results:**
+
+| Component | Time/Token | % Total |
+|-----------|------------|---------|
+| Forward pass (all layers) | 6.1ms | 10% |
+| Framework overhead | 55.9ms | **90%** |
+| **Total measured (sglang)** | **62ms** | 100% |
+
+**Breakdown of forward pass (6.1ms):**
+- SDPA attention: 0.03ms/layer × 30 = 0.9ms
+- BitNet GEMV (all): 0.15ms/layer × 30 = 4.5ms
+- Quantization: 0.01ms/layer × 30 = 0.4ms
+- Other ops: 0.3ms
+
+### Estimated Framework Overhead Sources
+
+| Source | Estimated Time |
+|--------|----------------|
+| HTTP server (parsing, SSE) | ~10ms |
+| Scheduler (radix tree, batching) | ~5ms |
+| Token sampling (logits, sampling) | ~2ms |
+| Detokenization | ~1ms |
+| Memory pool management | ~5ms |
+| GIL/async overhead | ~5ms |
+| Unknown (model executor loop, etc.) | ~28ms |
+| **Total framework overhead** | **~56ms** |
+
+### BitNet.cpp Comparison Blocked
+
+Attempted to run BitNet.cpp for comparison but hit compatibility issues:
+- HuggingFace model uses U8 (uint8) packed format
+- BitNet.cpp converters don't support U8 dtype
+- "Architecture 'BitNetForCausalLM' not supported!" error
+- Would need converter patches to test
+
+### C++ KV Cache Optimization Results
+
+Implemented C++ optimized KV cache gather with multi-dtype support:
+
+| Operation | Python (ms) | C++ (ms) | Speedup |
+|-----------|-------------|----------|---------|
+| KV gather (50 tokens) | 0.195 | 0.033 | **5.9x** |
+| KV gather (100 tokens) | 0.386 | 0.060 | **6.4x** |
+
+However, this 6x KV speedup barely impacts total throughput because:
+- KV gather is only ~1ms/token (1.6% of 62ms total)
+- Framework overhead dominates at 56ms
+
+### Theoretical vs Actual Performance
+
+| Metric | Value |
+|--------|-------|
+| Kernel theoretical (measured) | 164 tok/s (6.1ms) |
+| Current sglang throughput | 16 tok/s (62ms) |
+| **Potential speedup if overhead eliminated** | **10x** |
+| BitNet.cpp claimed (2B model) | ~47 tok/s |
+| Gap from theoretical | 3.5x (BitNet.cpp) vs 10x (sglang) |
+
+### Root Cause Analysis
+
+The 10x gap is due to sglang's architecture:
+1. **Request-per-request processing**: No true streaming
+2. **Python scheduler loop**: Per-token overhead
+3. **HTTP server**: OpenAI-compatible API adds latency
+4. **Radix tree**: Prefix caching overhead
+5. **Memory pool**: Tensor allocation tracking
+
+### Recommendations for Next Steps
+
+**Option 1: Direct Inference (bypass sglang)**
+- Write custom inference loop using BitNet kernels directly
+- Pre-allocate all tensors, no Python scheduler
+- Expected: ~100 tok/s (vs 16 tok/s current)
+
+**Option 2: Fix BitNet.cpp converter**
+- Patch convert-ms-to-gguf-bitnet.py to support U8 dtype
+- Test actual BitNet.cpp throughput
+- Expected: ~47 tok/s per BitNet.cpp claims
+
+**Option 3: Minimal sglang fork**
+- Strip HTTP server, use direct Python API
+- Remove radix tree overhead
+- Simplify scheduler for single-request
+- Expected: ~50-80 tok/s
+
+### Scripts Created
+
+- `scripts/profile_bitnet_ops.py` - Individual op timing
+- `scripts/direct_bitnet_inference.py` - Model weight benchmarking
+- `scripts/profile_sglang_overhead.py` - Overhead breakdown
+- `scripts/profile_forward_pass.py` - Realistic forward pass timing
+
+---
+
 ### Next Steps
 
-1. Integrate with SGLang continuous batching scheduler
+1. ~~Integrate with SGLang continuous batching scheduler~~
 2. Add Q-Sparse training to WrinkleFree-CheaperTraining
 3. Implement fused sparse matmul kernels for actual speedup
 4. Try VNNI-based kernel (avoid float conversion)
 5. Add AVX512 detection and dynamic dispatch
 6. Fuse KV cache update with attention kernel
 7. Test dynamic attention on real generation tasks
+8. **NEW: Build direct inference loop bypassing sglang**
+9. **NEW: Patch BitNet.cpp converter for U8 dtype support**
+10. **NEW: Explore minimal sglang fork without HTTP overhead**
