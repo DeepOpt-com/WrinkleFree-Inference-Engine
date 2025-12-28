@@ -911,15 +911,106 @@ The 10x gap is due to sglang's architecture:
 
 ---
 
+## 2024-12-28: Direct Inference Loop & Python Overhead Analysis
+
+### Objective
+
+Build direct inference loop bypassing sglang to verify kernel throughput potential.
+
+### Kernel-Level Benchmarking
+
+Measured sglang's `BitNetLinear` layer directly (no HTTP, no scheduler):
+
+| Operation | Time (ms) | Per Token (30 layers) |
+|-----------|-----------|----------------------|
+| Q projection (2560→2560) | 0.033 | 0.99ms |
+| Gate projection (2560→6912) | 0.051 | 1.53ms |
+| Down projection (6912→2560) | 0.046 | 1.38ms |
+| **7 GEMVs average** | 0.044 | **9.1ms** |
+| SDPA (seq=50) | 0.030 | 0.9ms |
+| RMS norm | 0.012 | 0.7ms |
+| **Total kernel time** | - | **10.7ms** |
+
+**Theoretical throughput: 93 tok/s** (from kernel time alone)
+
+### Actual Throughput Comparison
+
+| Implementation | Throughput | Latency | Notes |
+|---------------|------------|---------|-------|
+| Kernel theoretical | 93 tok/s | 10.7ms | GEMV + SDPA + norms |
+| Direct inference (Python) | 19 tok/s | 53ms | Custom forward loop |
+| sglang HTTP server | 16 tok/s | 62ms | Full framework |
+| HuggingFace transformers | 5.7 tok/s | 175ms | With weight unpacking |
+| BitNet.cpp (claimed) | 47 tok/s | 21ms | Pure C++ |
+
+### Python Overhead Analysis
+
+**Key Finding: 42ms of Python overhead per token (4x kernel time)**
+
+```
+Actual latency:    53ms (direct Python inference)
+Kernel time:       10.7ms
+Python overhead:   42.3ms (80% of total)
+```
+
+Sources of Python overhead:
+- Function call overhead (30 layers × many calls)
+- Dynamic `.item()` calls for scales
+- Tensor reshaping/view operations
+- Memory allocation tracking
+- GIL contention in custom ops
+
+### torch.compile Results
+
+Attempted `torch.compile(mode="reduce-overhead")`:
+
+| Metric | Without Compile | With Compile |
+|--------|-----------------|--------------|
+| Throughput | 19 tok/s | 11.9 tok/s |
+| Latency | 53ms | 84ms |
+
+**Result: 40% slower** due to:
+1. Graph breaks from `.item()` calls in quantization
+2. Excessive recompilations (layer_idx, scale values change)
+3. Custom `bitnet_gemv` kernel not compilable
+4. Dynamic tensor shapes cause recompilation
+
+### Key Insights
+
+1. **Kernel performance is excellent**: 10.7ms/token = 93 tok/s theoretical
+2. **Python is the bottleneck**: 42ms overhead = 4x kernel time
+3. **torch.compile doesn't help**: Custom kernels cause graph breaks
+4. **sglang HTTP overhead is minimal**: Only 9ms (62ms - 53ms)
+5. **BitNet.cpp advantage**: Pure C++ eliminates Python overhead
+
+### Path to 47+ tok/s
+
+To match BitNet.cpp's 47 tok/s, we need to eliminate Python overhead:
+
+| Approach | Expected Throughput | Difficulty |
+|----------|-------------------|------------|
+| Current Python | 19 tok/s | Baseline |
+| C++ inference loop | 50-70 tok/s | Medium |
+| BitNet.cpp (if converter fixed) | 47 tok/s | Medium |
+| Fused C++ kernels | 80+ tok/s | High |
+
+**Recommendation**: Focus on fixing BitNet.cpp converter (U8 dtype support) as the fastest path to 47+ tok/s.
+
+### Scripts Created
+
+- `scripts/direct_inference_full.py` - Full Python inference loop with RoPE
+- `scripts/sglang_model_direct.py` - Kernel-level timing benchmarks
+- `scripts/sglang_direct_test.py` - HuggingFace comparison
+
+---
+
 ### Next Steps
 
 1. ~~Integrate with SGLang continuous batching scheduler~~
-2. Add Q-Sparse training to WrinkleFree-CheaperTraining
-3. Implement fused sparse matmul kernels for actual speedup
-4. Try VNNI-based kernel (avoid float conversion)
-5. Add AVX512 detection and dynamic dispatch
-6. Fuse KV cache update with attention kernel
-7. Test dynamic attention on real generation tasks
-8. **NEW: Build direct inference loop bypassing sglang**
-9. **NEW: Patch BitNet.cpp converter for U8 dtype support**
-10. **NEW: Explore minimal sglang fork without HTTP overhead**
+2. ~~Build direct inference loop bypassing sglang~~
+3. ~~Profile kernel vs Python overhead~~
+4. ~~Test torch.compile optimization~~
+5. **Patch BitNet.cpp converter for U8 dtype support**
+6. Build C++ inference loop (if BitNet.cpp blocked)
+7. Add Q-Sparse training to WrinkleFree-CheaperTraining
+8. Implement fused sparse matmul kernels
