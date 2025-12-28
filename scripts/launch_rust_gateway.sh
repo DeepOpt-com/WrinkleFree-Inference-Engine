@@ -19,6 +19,11 @@
 
 set -euo pipefail
 
+# Source cargo if available
+if [[ -f "$HOME/.cargo/env" ]]; then
+    source "$HOME/.cargo/env"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 GATEWAY_DIR="${PROJECT_DIR}/extern/sglang-bitnet/sgl-model-gateway"
