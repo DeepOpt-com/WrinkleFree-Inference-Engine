@@ -267,48 +267,107 @@ class TestGatherScatterReference:
 # Iteration 4+ Tests: C++ vs Python Comparison
 # =============================================================================
 
+def _cpp_available():
+    """Check if C++ KV cache bindings are available."""
+    try:
+        from sgl_kernel.kvcache import KVCacheManager, check_kernel_available
+        return check_kernel_available()
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _cpp_available(), reason="C++ KV cache bindings not available")
 class TestCppVsPython:
-    """Compare C++ implementation against Python reference.
+    """Compare C++ implementation against Python reference."""
 
-    These tests are skipped until C++ bindings are implemented (Iteration 4).
-    """
-
-    @pytest.fixture
-    def cpp_available(self):
-        """Check if C++ KV cache bindings are available."""
-        try:
-            from sgl_kernel.kvcache import (
-                kv_cache_create,
-                kv_cache_gather,
-                kv_cache_scatter,
-            )
-            return True
-        except ImportError:
-            return False
-
-    @pytest.mark.skip(reason="C++ bindings not implemented until Iteration 4")
-    def test_gather_cpp_vs_python(self, cpp_available):
-        """Test C++ gather matches Python reference."""
-        if not cpp_available:
-            pytest.skip("C++ KV cache bindings not available")
-
-        # Will be implemented in Iteration 4
-        pass
-
-    @pytest.mark.skip(reason="C++ bindings not implemented until Iteration 4")
-    def test_scatter_cpp_vs_python(self, cpp_available):
-        """Test C++ scatter matches Python reference."""
-        if not cpp_available:
-            pytest.skip("C++ KV cache bindings not available")
-
-        # Will be implemented in Iteration 4
-        pass
-
-    @pytest.mark.skip(reason="C++ bindings not implemented until Iteration 4")
-    def test_allocation_cpp_vs_python(self, cpp_available):
+    def test_allocation_cpp_vs_python(self):
         """Test C++ allocation matches Python behavior."""
-        if not cpp_available:
-            pytest.skip("C++ KV cache bindings not available")
+        from sgl_kernel.kvcache import KVCacheManager
 
-        # Will be implemented in Iteration 4
-        pass
+        # Create both implementations
+        py_cache = PythonKVCacheReference(**BITNET_CONFIG)
+        cpp_cache = KVCacheManager(**BITNET_CONFIG)
+
+        # Test initial state
+        assert py_cache.num_free_pages() == cpp_cache.num_free_pages()
+
+        # Allocate same number of pages
+        py_pages = py_cache.allocate_pages(10)
+        cpp_pages = cpp_cache.allocate_pages(10)
+
+        assert py_pages.shape == cpp_pages.shape
+        assert py_cache.num_free_pages() == cpp_cache.num_free_pages()
+
+        # Free pages and check count
+        py_cache.free_pages_batch(py_pages)
+        cpp_cache.free_pages(cpp_pages)
+        assert py_cache.num_free_pages() == cpp_cache.num_free_pages()
+
+    def test_gather_scatter_roundtrip_cpp_vs_python(self):
+        """Test C++ scatter→gather roundtrip matches Python reference."""
+        from sgl_kernel.kvcache import KVCacheManager
+
+        num_tokens = 16
+        py_cache = PythonKVCacheReference(**BITNET_CONFIG)
+        cpp_cache = KVCacheManager(**BITNET_CONFIG)
+
+        # Allocate pages
+        py_pages = py_cache.allocate_pages(num_tokens)
+        cpp_pages = cpp_cache.allocate_pages(num_tokens)
+        slots = torch.zeros(num_tokens, dtype=torch.int32)
+        layer_id = 5
+
+        # Create random K/V tensors
+        k_in = torch.randn(num_tokens, BITNET_CONFIG["num_heads"], BITNET_CONFIG["head_dim"])
+        v_in = torch.randn(num_tokens, BITNET_CONFIG["num_heads"], BITNET_CONFIG["head_dim"])
+
+        # Python scatter & gather
+        py_cache.scatter_kv(k_in, v_in, py_pages, slots, layer_id)
+        py_k_out, py_v_out = py_cache.gather_kv(py_pages, slots, layer_id)
+
+        # C++ scatter & gather (reshape for C++ interface)
+        k_in_flat = k_in.reshape(num_tokens, -1)
+        v_in_flat = v_in.reshape(num_tokens, -1)
+        cpp_k_out = torch.zeros_like(k_in_flat)
+        cpp_v_out = torch.zeros_like(v_in_flat)
+
+        cpp_cache.scatter_kv(k_in_flat, v_in_flat, cpp_pages, slots, layer_id)
+        cpp_cache.gather_kv(cpp_k_out, cpp_v_out, cpp_pages, slots, layer_id)
+
+        # Reshape C++ output for comparison
+        cpp_k_out = cpp_k_out.reshape(num_tokens, BITNET_CONFIG["num_heads"], BITNET_CONFIG["head_dim"])
+        cpp_v_out = cpp_v_out.reshape(num_tokens, BITNET_CONFIG["num_heads"], BITNET_CONFIG["head_dim"])
+
+        # Compare outputs
+        assert torch.allclose(py_k_out, k_in, atol=1e-5), "Python K roundtrip failed"
+        assert torch.allclose(py_v_out, v_in, atol=1e-5), "Python V roundtrip failed"
+        assert torch.allclose(cpp_k_out, k_in, atol=1e-5), "C++ K roundtrip failed"
+        assert torch.allclose(cpp_v_out, v_in, atol=1e-5), "C++ V roundtrip failed"
+
+    def test_multiple_layers_cpp_vs_python(self):
+        """Test C++ handles multiple layers correctly."""
+        from sgl_kernel.kvcache import KVCacheManager
+
+        num_tokens = 8
+        cpp_cache = KVCacheManager(**BITNET_CONFIG)
+        pages = cpp_cache.allocate_pages(num_tokens)
+        slots = torch.zeros(num_tokens, dtype=torch.int32)
+
+        # Scatter different data to different layers
+        k_layers = []
+        v_layers = []
+        for layer_id in range(BITNET_CONFIG["num_layers"]):
+            k = torch.randn(num_tokens, BITNET_CONFIG["num_heads"] * BITNET_CONFIG["head_dim"])
+            v = torch.randn(num_tokens, BITNET_CONFIG["num_heads"] * BITNET_CONFIG["head_dim"])
+            k_layers.append(k)
+            v_layers.append(v)
+            cpp_cache.scatter_kv(k, v, pages, slots, layer_id)
+
+        # Gather from each layer and verify
+        for layer_id in range(BITNET_CONFIG["num_layers"]):
+            k_out = torch.zeros_like(k_layers[0])
+            v_out = torch.zeros_like(v_layers[0])
+            cpp_cache.gather_kv(k_out, v_out, pages, slots, layer_id)
+
+            assert torch.allclose(k_out, k_layers[layer_id], atol=1e-5), f"Layer {layer_id} K mismatch"
+            assert torch.allclose(v_out, v_layers[layer_id], atol=1e-5), f"Layer {layer_id} V mismatch"
