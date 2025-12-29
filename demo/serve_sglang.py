@@ -20,6 +20,7 @@ Run:
   2. Start Streamlit: BITNET_BACKEND=sglang uv run streamlit run demo/serve_sglang.py
 """
 
+import html
 import json
 import os
 import time
@@ -158,6 +159,22 @@ st.set_page_config(
     layout="wide",
 )
 
+# Custom CSS for fade-in animation on new tokens
+st.markdown("""
+<style>
+@keyframes fadeIn {
+    from { opacity: 0; color: #4CAF50; }
+    to { opacity: 1; color: inherit; }
+}
+.fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+}
+.streaming-text .fade-in:last-child {
+    animation: fadeIn 0.3s ease-out forwards;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("BitNet-b1.58-2B-4T Chat")
 st.caption("SGLang backend | Native SIMD kernels | Streaming generation")
 
@@ -231,11 +248,19 @@ if prompt := st.chat_input("Type a message..."):
             start_time = time.perf_counter()
 
             for token in generate_streaming(api_messages, max_tokens, temperature, repetition_penalty):
+                # Escape HTML in token for safety
+                escaped_token = html.escape(token)
+                escaped_full = html.escape(full_response)
+
+                # Render with fade-in effect on the new token
+                # Use <pre> style to preserve whitespace, wrap in div for animation
+                html_content = f'''<div class="streaming-text" style="white-space: pre-wrap; font-family: inherit;">{escaped_full}<span class="fade-in">{escaped_token}</span></div>'''
+                output_placeholder.markdown(html_content, unsafe_allow_html=True)
+
                 full_response += token
                 token_count += 1
-                output_placeholder.markdown(full_response + "")
 
-            # Final update
+            # Final update (plain markdown for proper rendering)
             output_placeholder.markdown(full_response)
             elapsed = time.perf_counter() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
