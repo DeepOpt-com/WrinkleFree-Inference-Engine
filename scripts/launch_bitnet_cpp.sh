@@ -33,7 +33,7 @@ if [[ ! -x "${BITNET_DIR}/build/bin/llama-server" ]]; then
     echo "Error: llama-server not found. Build BitNet.cpp first:"
     echo "  cd extern/BitNet"
     echo "  cmake -B build -DBITNET_X86_TL2=ON"
-    echo "  cmake --build build --config Release -j\$(nproc)"
+    echo "  cmake --build build --config Release -j4"
     exit 1
 fi
 
@@ -59,7 +59,8 @@ echo ""
 # Launch server with optimizations
 # --cache-reuse 64: Reuse KV cache for prompts sharing 64+ token prefix
 # --n-gpu-layers 0: CPU-only (BitNet is optimized for CPU)
-exec "${BITNET_DIR}/build/bin/llama-server" \
+# taskset limits to 8 cores to prevent system freeze
+exec taskset -c 0-7 "${BITNET_DIR}/build/bin/llama-server" \
     -m "$MODEL" \
     --host "$HOST" \
     --port "$PORT" \

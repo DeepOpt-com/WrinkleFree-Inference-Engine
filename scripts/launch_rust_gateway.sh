@@ -78,8 +78,8 @@ else
     echo "Building with gRPC backend (Python scheduler)..."
 fi
 
-# Build in release mode
-cargo build --release $FEATURES
+# Build in release mode (limit to 4 jobs to prevent system freeze)
+cargo build --release $FEATURES -j4
 
 # Set library path for llama.cpp shared libraries (now in sglang-bitnet)
 export LD_LIBRARY_PATH="${PROJECT_DIR}/extern/sglang-bitnet/3rdparty/llama.cpp/build/src:${PROJECT_DIR}/extern/sglang-bitnet/3rdparty/llama.cpp/build/ggml/src:${LD_LIBRARY_PATH:-}"

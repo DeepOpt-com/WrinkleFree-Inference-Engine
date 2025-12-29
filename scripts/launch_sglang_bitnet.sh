@@ -57,7 +57,8 @@ echo ""
 # Launch server with uv
 # NOTE: Do NOT use --trust-remote-code, transformers 4.57+ has native BitNet support
 # NOTE: --enable-torch-compile reduces Python overhead by ~10-15%
-exec uv run python -m sglang.launch_server \
+# NOTE: taskset limits to 8 cores to prevent system freeze
+exec taskset -c 0-7 uv run python -m sglang.launch_server \
     --model-path "$MODEL" \
     --port "$PORT" \
     --host "$HOST" \

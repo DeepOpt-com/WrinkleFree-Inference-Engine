@@ -9,14 +9,21 @@ WrinkleFree Inference Engine is a serving layer for 1.58-bit quantized LLMs:
 - **Frontend**: Streamlit chat UI with SSE streaming
 - **Deployment**: Via WrinkleFree-Deployer (GCP C3D, H3, RunPod)
 
+## Build & Server Throttling (IMPORTANT)
+
+All launch scripts have **hard-coded CPU limits** to prevent system freeze:
+- **Builds**: Limited to 4 parallel jobs (`-j4`)
+- **Servers**: Pinned to 8 cores via `taskset -c 0-7`
+
+For manual builds, use the safe wrapper:
+```bash
+./scripts/build-safe.sh cargo build --release
+./scripts/build-safe.sh cmake --build build
+```
+
 ## BitNet.cpp Quick Start (Recommended - 1.6x faster)
 
 **Prerequisites**: `clang` compiler required (`sudo apt install clang`)
-
-**Build tip**: Limit parallel jobs to avoid freezing your machine (default uses all cores):
-```bash
-export CMAKE_BUILD_PARALLEL_LEVEL=4  # Use 4 cores instead of all
-```
 
 ```bash
 # Build BitNet.cpp (one-time) - uses setup_env.py to generate kernel headers
@@ -106,6 +113,7 @@ demo/
 └── serve_sglang.py                        # Streamlit chat frontend
 
 scripts/
+├── build-safe.sh                          # Safe build wrapper (4 jobs, 8 cores)
 ├── launch_rust_gateway.sh                # Rust gateway (native inference)
 ├── launch_sglang_bitnet.sh               # SGLang Python server
 ├── launch_bitnet_cpp.sh                  # BitNet.cpp server
