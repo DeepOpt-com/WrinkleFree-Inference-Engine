@@ -81,8 +81,8 @@ fi
 # Build in release mode
 cargo build --release $FEATURES
 
-# Set library path for llama.cpp shared libraries
-export LD_LIBRARY_PATH="${PROJECT_DIR}/extern/BitNet/build/3rdparty/llama.cpp/src:${PROJECT_DIR}/extern/BitNet/build/3rdparty/llama.cpp/ggml/src:${LD_LIBRARY_PATH:-}"
+# Set library path for llama.cpp shared libraries (now in sglang-bitnet)
+export LD_LIBRARY_PATH="${PROJECT_DIR}/extern/sglang-bitnet/3rdparty/llama.cpp/build/src:${PROJECT_DIR}/extern/sglang-bitnet/3rdparty/llama.cpp/build/ggml/src:${LD_LIBRARY_PATH:-}"
 
 # Run the gateway
 echo ""
@@ -100,15 +100,27 @@ if [[ "$BACKEND" == "native" ]]; then
         # Look for GGUF in directory
         GGUF_PATH=$(find "$MODEL" -name "*.gguf" | head -1)
     else
-        # Check in BitNet models directory
-        GGUF_PATH="${PROJECT_DIR}/extern/BitNet/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
+        # Check in models directory (project root)
+        GGUF_PATH="${PROJECT_DIR}/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
     fi
 
     if [[ ! -f "$GGUF_PATH" ]]; then
-        echo "Error: Could not find GGUF model file"
-        echo "Looked for: $MODEL"
-        echo "Download with: huggingface-cli download microsoft/BitNet-b1.58-2B-4T-gguf --local-dir extern/BitNet/models/BitNet-b1.58-2B-4T"
-        exit 1
+        echo "Model not found at: $GGUF_PATH"
+        echo "Downloading microsoft/BitNet-b1.58-2B-4T-gguf..."
+        mkdir -p "${PROJECT_DIR}/models"
+        huggingface-cli download microsoft/BitNet-b1.58-2B-4T-gguf --local-dir "${PROJECT_DIR}/models/BitNet-b1.58-2B-4T"
+        GGUF_PATH="${PROJECT_DIR}/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
+        if [[ ! -f "$GGUF_PATH" ]]; then
+            echo "Error: Download failed"
+            exit 1
+        fi
+    fi
+
+    # Ensure tokenizer is present
+    TOKENIZER_PATH="${PROJECT_DIR}/models/BitNet-b1.58-2B-4T/tokenizer.json"
+    if [[ ! -f "$TOKENIZER_PATH" ]]; then
+        echo "Downloading tokenizer..."
+        huggingface-cli download microsoft/BitNet-b1.58-2B-4T tokenizer.json tokenizer_config.json --local-dir "${PROJECT_DIR}/models/BitNet-b1.58-2B-4T"
     fi
 
     echo "Model file: $GGUF_PATH"
