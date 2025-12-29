@@ -163,14 +163,20 @@ st.set_page_config(
 st.markdown("""
 <style>
 @keyframes fadeIn {
-    from { opacity: 0; color: #4CAF50; }
-    to { opacity: 1; color: inherit; }
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
-.fade-in {
-    animation: fadeIn 0.4s ease-out forwards;
+.token-new {
+    animation: fadeIn 1.2s ease-out forwards;
 }
-.streaming-text .fade-in:last-child {
-    animation: fadeIn 0.3s ease-out forwards;
+.token-recent {
+    animation: fadeIn 0.8s ease-out forwards;
+}
+.token-fading {
+    animation: fadeIn 0.5s ease-out forwards;
+}
+.streaming-text {
+    line-height: 1.6;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -247,14 +253,37 @@ if prompt := st.chat_input("Type a message..."):
             token_count = 0
             start_time = time.perf_counter()
 
-            for token in generate_streaming(api_messages, max_tokens, temperature, repetition_penalty):
-                # Escape HTML in token for safety
-                escaped_token = html.escape(token)
-                escaped_full = html.escape(full_response)
+            # Track recent tokens for cascading fade effect
+            recent_tokens = []  # List of (token, timestamp) tuples
 
-                # Render with fade-in effect on the new token
-                # Use <pre> style to preserve whitespace, wrap in div for animation
-                html_content = f'''<div class="streaming-text" style="white-space: pre-wrap; font-family: inherit;">{escaped_full}<span class="fade-in">{escaped_token}</span></div>'''
+            for token in generate_streaming(api_messages, max_tokens, temperature, repetition_penalty):
+                current_time = time.perf_counter()
+                recent_tokens.append((token, current_time))
+
+                # Build HTML with fading tokens
+                # Tokens older than 1.5s get no animation, recent ones get cascading fade
+                html_parts = []
+                animated_start_idx = 0
+
+                for i, (t, ts) in enumerate(recent_tokens):
+                    age = current_time - ts
+                    escaped_t = html.escape(t)
+
+                    if age > 1.2:
+                        # Old token - no animation
+                        html_parts.append(escaped_t)
+                        animated_start_idx = i + 1
+                    elif age > 0.6:
+                        # Fading token
+                        html_parts.append(f'<span class="token-fading">{escaped_t}</span>')
+                    elif age > 0.2:
+                        # Recent token
+                        html_parts.append(f'<span class="token-recent">{escaped_t}</span>')
+                    else:
+                        # New token
+                        html_parts.append(f'<span class="token-new">{escaped_t}</span>')
+
+                html_content = f'''<div class="streaming-text" style="white-space: pre-wrap; font-family: inherit;">{''.join(html_parts)}</div>'''
                 output_placeholder.markdown(html_content, unsafe_allow_html=True)
 
                 full_response += token
