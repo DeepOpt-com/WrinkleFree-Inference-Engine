@@ -104,7 +104,7 @@ if $START_SERVER; then
             pkill -f "sglang.launch_server.*$SERVER_PORT" 2>/dev/null || true
             sleep 1
 
-            .venv/bin/python -m sglang.launch_server \
+            uv run python -m sglang.launch_server \
                 --model-path "$MODEL" \
                 --port "$SERVER_PORT" \
                 --host "$HOST" \
@@ -146,12 +146,18 @@ if $START_UI; then
     # Set backend URL for Streamlit
     export SGLANG_URL="http://127.0.0.1:$SERVER_PORT"
 
-    # For BitNet.cpp backend, use different env var
-    if [[ "$BACKEND" == "bitnet" ]]; then
-        export BITNET_BACKEND=bitnet_cpp
-    fi
+    # Set BITNET_BACKEND based on backend type
+    case "$BACKEND" in
+        rust|sglang)
+            export BITNET_BACKEND=sglang  # Use sglang protocol (OpenAI-compatible)
+            ;;
+        bitnet)
+            export BITNET_BACKEND=bitnet_cpp
+            export BITNET_URL="http://127.0.0.1:$SERVER_PORT"
+            ;;
+    esac
 
-    .venv/bin/streamlit run demo/serve_sglang.py \
+    uv run streamlit run demo/serve_sglang.py \
         --server.port "$STREAMLIT_PORT" \
         --server.address "$HOST" \
         --server.headless true
